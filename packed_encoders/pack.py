@@ -18,7 +18,9 @@ from packed_encoders import ops
 from packed_encoders.config import ModernBertParams
 from packed_encoders.errors import PackedEncodersError
 from packed_encoders.forward import fused_forward
-from packed_encoders.graph import GraphConfig, build_packed_runner, build_runner, graphs_globally_disabled
+from packed_encoders.graph import (
+    GraphConfig, build_packed_runner, build_runner, graphs_globally_disabled, rectangular_graph_backend,
+)
 from packed_encoders.train_graph import TrainGraphConfig, build_train_runner
 from packed_encoders.locate import find_encoder
 from packed_encoders.state import ATTR, PatchState
@@ -170,12 +172,7 @@ def _enable_graphs(
         cuda_graph if isinstance(cuda_graph, GraphConfig)
         else GraphConfig(max_seq=seq_cutoff)
     )
-    graph_backend = state.attention_backend
-    if graph_backend in ("auto", "triton"):
-        # A rectangular graph cannot turn a dynamic padding mask into capture-safe
-        # cu_seqlens. Auto/Triton graph only through the already-packed runner; using
-        # dense Flash here would attend to padding, while SDPA would violate auto.
-        graph_backend = None
+    graph_backend = rectangular_graph_backend(state.attention_backend)
     state.graph_runner = (
         build_runner(encoder, state.params, config, backend=graph_backend)
         if graph_backend is not None else None
