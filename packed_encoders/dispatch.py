@@ -1,9 +1,10 @@
 """The public entry points, dispatched through the architecture registry.
 
 This module (and everything it imports at load time) stays free of any one architecture's
-kernel toolchain: ModernBERT's CuteDSL kernels load when a ModernBERT model is packed. So
-`import packed_encoders` also works in an environment built for another architecture, whose
-torch pin CuteDSL's dependencies may not fit.
+kernel toolchain: ModernBERT's CuteDSL kernels load when a ModernBERT model is packed, fla
+when a Qwen3.5 model is. So `import packed_encoders` works in an environment built for
+either — e.g. topk-embed's pinned torch 2.11 stack, where nvidia-cutlass-dsl 4.5.2 would
+pull a CUDA 13 torch over the cu128 one.
 """
 
 from __future__ import annotations
@@ -25,7 +26,8 @@ def pack(
 ) -> object:
     """Install the architecture's fast forward onto the backbone inside `target`, in place,
     and return `target`. See `packed_encoders.pack._pack_modernbert` for the ModernBERT
-    options. `cuda_graph=None` means the architecture's default (off for ModernBERT)."""
+    options and `packed_encoders.arch.qwen3_5` for Qwen3.5. `cuda_graph=None` means the
+    architecture's default (off for ModernBERT, on for Qwen3.5)."""
     arch, encoder = find_backbone(target)
     arch.pack(
         target, encoder, cuda_graph=cuda_graph, train_cuda_graph=train_cuda_graph,

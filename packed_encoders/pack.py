@@ -76,7 +76,7 @@ def pack(
     `validate` runs the hard gate during pack.
 
     Other architectures (see `packed_encoders.arch`) take the same call;
-    `cuda_graph=None` means that architecture's default (off for ModernBERT).
+    `cuda_graph=None` means that architecture's default (off for ModernBERT, on for Qwen3.5).
     """
     from packed_encoders.dispatch import pack as _dispatch_pack
 

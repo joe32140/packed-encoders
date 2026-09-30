@@ -2,8 +2,8 @@
 
 packed-encoders speeds a model up by replacing one module's `forward`, in place, with an
 engine that computes the same function faster. *Which* module and *how* are
-architecture-specific; the entry points are shared. An `Architecture` is the seam between
-the two:
+architecture-specific; graphs, staging, and attention-kernel selection are shared
+(`packed_encoders.runtime`). An `Architecture` is the seam between the two:
 
     match(module)             is this live module one I patch?
     validate(module, ...)     hard gate: return a report or raise ValidationError
