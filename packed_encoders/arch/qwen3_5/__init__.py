@@ -22,6 +22,7 @@ fla (flash-linear-attention) is imported only when a Qwen3.5 model is actually p
 
 from __future__ import annotations
 
+import gc
 import warnings
 from dataclasses import dataclass, field
 from typing import Any
@@ -143,13 +144,31 @@ def _vectors(state: Qwen35State, hidden: Tensor) -> Tensor:
 
 def _encode_text(state: Qwen35State, ids: Tensor, lengths: list[int], *, graphs: bool) -> Tensor:
     state.engine.sync_norms()                 # norms trained since packing reach the graphs too
-    hidden = None
-    if graphs and state.runner is not None and state.graph_enabled and not graphs_globally_disabled() \
-            and not torch.is_autocast_enabled("cuda"):
-        hidden = state.runner(ids, lengths)
-    if hidden is None:
-        hidden = state.engine.forward_packed(ids, lengths)
-    return _vectors(state, hidden)
+    for attempt in (0, 1):
+        try:
+            hidden = None
+            if graphs and state.runner is not None and state.graph_enabled and not graphs_globally_disabled() \
+                    and not torch.is_autocast_enabled("cuda"):
+                hidden = state.runner(ids, lengths)
+            if hidden is None:
+                hidden = state.engine.forward_packed(ids, lengths)
+            return _vectors(state, hidden)
+        except torch.OutOfMemoryError as exc:
+            if attempt or state.runner is None:
+                raise
+            reason = str(exc).splitlines()[0][:160]
+        _drop_graphs(state, reason)          # outside the handler: its traceback would keep the graphs alive
+
+
+def _drop_graphs(state: Qwen35State, reason: str) -> None:
+    """Graphs are an optimisation, and their private memory pool can't lend to the eager path: out of
+    GPU memory with graphs held, free them all and continue eager."""
+    state.runner, state.graph_enabled = None, False
+    gc.collect()
+    torch.cuda.empty_cache()
+    warnings.warn(f"packed-encoders: out of GPU memory with CUDA graphs held ({reason}); dropped them and "
+                  "continuing without. To keep graphs for short batches only: pe.set_cuda_graph(model, True, "
+                  "config=PaddedGraphConfig(max_tokens=4096))", stacklevel=3)
 
 
 def _make_topk_forward(module: nn.Module, state: Qwen35State):

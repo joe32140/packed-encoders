@@ -430,6 +430,35 @@ def test_hf_entry_packs_stock_models_and_keeps_their_contract(tiny, kind):
     assert torch.allclose(run().last_hidden_state, stock, atol=1e-3)
 
 
+def test_out_of_memory_with_graphs_drops_them_and_continues_eager(tiny):
+    import packed_encoders as pe
+    from packed_encoders.state import ATTR
+
+    model = copy.deepcopy(tiny)
+    g = torch.Generator().manual_seed(6)
+    ids = torch.randint(0, 1024, (3, 40), generator=g).cuda()
+    with torch.no_grad():
+        stock = model(input_ids=ids, use_cache=False).last_hidden_state
+    pe.pack(model)
+    state = getattr(model, ATTR)
+
+    def oom(*a, **k):
+        raise torch.OutOfMemoryError("CUDA out of memory. (simulated)")
+
+    state.runner._capture = oom                       # the next new bucket can't be captured
+    with pytest.warns(UserWarning, match="dropped them"), torch.no_grad():
+        out = model(input_ids=ids, use_cache=False).last_hidden_state
+    assert state.runner is None and not state.graph_enabled
+    cos = F.cosine_similarity(out.float(), stock.float(), dim=-1)
+    assert cos.mean().item() > 0.999
+
+    state.engine.forward_packed = oom                 # no graphs left to free: a real OOM propagates
+    with pytest.raises(torch.OutOfMemoryError), torch.no_grad():
+        model(input_ids=ids, use_cache=False)
+    del state.engine.forward_packed
+    pe.unpack(model)
+
+
 # ---------------------------------------------------------------------------- topk end to end
 
 

@@ -52,6 +52,13 @@ Calls the engine can't serve exactly run the original forward: images, gradients
 (`output_hidden_states`, ...), and left padding. pplx ships fp32 weights; the engine runs bf16,
 so load it in bf16 and check retrieval against fp32 for your data.
 
+**Memory on large models.** A CUDA graph's memory pool can't borrow from PyTorch's regular
+cache, so graphs cost activation memory on top of what eager batches leave cached. With a 9B
+model on a 48 GB GPU, the default buckets (up to 16k tokens) don't fit beside the weights. If
+a call runs out of GPU memory while graphs are held, the engine frees them, warns once, and
+continues eager. To keep graphs where they pay off (short, launch-bound batches such as
+queries), cap them: `pe.set_cuda_graph(model, True, config=PaddedGraphConfig(max_tokens=4096))`.
+
 What the engine does (`arch/qwen3_5/engine.py`), all exact rewrites of the model's math:
 
 - **Merged projections.** GatedDeltaNet q|k|v|z|b|a, attention q|gate|k|v and MLP gate|up are

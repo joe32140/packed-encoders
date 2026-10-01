@@ -285,6 +285,9 @@ class PaddedGraphRunner:
                 for _ in range(self.config.warmup):   # autotune + allocator warmup, off-graph
                     self._run(static)
             torch.cuda.current_stream().wait_stream(side)
+            # The warmup's activations sit in the regular allocator's cache, which the graph's private
+            # pool can't use: release them, or every capture needs the bucket's peak twice over.
+            torch.cuda.empty_cache()
             graph = torch.cuda.CUDAGraph()
             # Capture on this runner's stream: torch.cuda.graph's default capture stream is one per
             # process, created on whichever device captured first, and entering it switches to that device.
