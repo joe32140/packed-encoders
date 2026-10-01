@@ -38,9 +38,10 @@ class PinnedStager:
         for p, k in zip(parts, sizes):
             self._buf[off:off + k] = p.reshape(-1)
             off += k
-        dev = self._buf[:n].to(self.device, non_blocking=True)
-        self._event = torch.cuda.Event()
-        self._event.record()
+        with torch.cuda.device(self.device):       # record the event on the copy's own stream
+            dev = self._buf[:n].to(self.device, non_blocking=True)
+            self._event = torch.cuda.Event()
+            self._event.record()
         return list(dev.split(sizes))
 
 

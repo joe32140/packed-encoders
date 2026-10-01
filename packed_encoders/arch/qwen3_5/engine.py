@@ -242,29 +242,33 @@ class Qwen35Engine:
             raise UnsupportedTargetError(f"the Qwen3.5 engine needs CUDA weights; model is on {self.device}")
         self.hidden_size = cfg.hidden_size
         self.eps = cfg.rms_norm_eps
-        self.w_final = (1.0 + text_model.norm.weight.detach().float()).contiguous()
+        self._norms: list[list] = []            # [parameter (detached), fp32 copy, version seen]; see sync_norms
+        self.w_final = self._plus_one(text_model.norm.weight)
         n = cfg.num_hidden_layers
         self.shared: list[nn.Linear] = []
         kinds = list(getattr(cfg, "layer_types", None) or [])
         if len(kinds) < n:
             raise UnsupportedTargetError("config.layer_types is missing or shorter than num_hidden_layers")
         try:
-            self.layers = [self._prepare(layer, kind) for layer, kind in zip(text_model.layers[:n], kinds[:n])]
-            gdn = next((L for L in self.layers if L.linear), None)
-            self.gdn: GdnChoice | None = None
-            if gdn is not None:
-                self.gdn = select_gdn(gdn, self.device, self.dtype, recurrent_max_len)
-            attn = next((L for L in self.layers if not L.linear), None)
-            self.attention: AttentionChoice | None = None
-            self.qk_check_err = None
-            if attn is not None:
-                self.attention = select_attention(n_heads=attn.nq, n_kv_heads=attn.nkv, head_dim=attn.hd,
-                                                  causal=causal, device=self.device, dtype=self.dtype,
-                                                  order=attention_order)
-                self.qk_check_err = self._check_qk(attn)
-            self.fusion_errors: dict[str, float] = {}
-            self.fusion_rejected: dict[str, str] = {}
-            self.fused = fused and self._check_fusions(gdn, attn)
+            # Triton launches and CUDA graphs use the *current* device, not the tensors': pin it to the
+            # weights' for every launch (here, `forward_packed`, the graph runner, the stager).
+            with torch.cuda.device(self.device):
+                self.layers = [self._prepare(layer, kind) for layer, kind in zip(text_model.layers[:n], kinds[:n])]
+                gdn = next((L for L in self.layers if L.linear), None)
+                self.gdn: GdnChoice | None = None
+                if gdn is not None:
+                    self.gdn = select_gdn(gdn, self.device, self.dtype, recurrent_max_len)
+                attn = next((L for L in self.layers if not L.linear), None)
+                self.attention: AttentionChoice | None = None
+                self.qk_check_err = None
+                if attn is not None:
+                    self.attention = select_attention(n_heads=attn.nq, n_kv_heads=attn.nkv, head_dim=attn.hd,
+                                                      causal=causal, device=self.device, dtype=self.dtype,
+                                                      order=attention_order)
+                    self.qk_check_err = self._check_qk(attn)
+                self.fusion_errors: dict[str, float] = {}
+                self.fusion_rejected: dict[str, str] = {}
+                self.fused = fused and self._check_fusions(gdn, attn)
         except Exception:
             unshare_rows(self.shared)            # leave the model exactly as we found it
             raise
@@ -276,8 +280,8 @@ class Qwen35Engine:
         L.linear = kind == "linear_attention"
         if kind not in ("linear_attention", "full_attention"):
             raise UnsupportedTargetError(f"unsupported Qwen3.5 layer type {kind!r}")
-        L.w_in = (1.0 + layer.input_layernorm.weight.detach().float()).contiguous()
-        L.w_post = (1.0 + layer.post_attention_layernorm.weight.detach().float()).contiguous()
+        L.w_in = self._plus_one(layer.input_layernorm.weight)
+        L.w_post = self._plus_one(layer.post_attention_layernorm.weight)
         mlp = layer.mlp
         if not all(hasattr(mlp, a) for a in ("gate_proj", "up_proj", "down_proj")):
             raise UnsupportedTargetError("only the dense SwiGLU MLP is supported (no MoE layers)")
@@ -322,13 +326,34 @@ class Qwen35Engine:
                 raise UnsupportedTargetError(f"q_proj has {q_rows} rows; expected {L.nq}x{L.hd} (x2 if gated)")
             L.qkv = _share_rows([sa.q_proj, sa.k_proj, sa.v_proj], self.shared)
             L.q_norm = sa.q_norm
-            L.wq = (1.0 + sa.q_norm.weight.detach().float()).contiguous()
-            L.wk = (1.0 + sa.k_norm.weight.detach().float()).contiguous()
-            L.wqk = torch.stack([L.wq, L.wk]).contiguous()
+            L.wqk = torch.empty((2, L.hd), device=self.device, dtype=torch.float32)   # q row, k row
+            L.wq = self._plus_one(sa.q_norm.weight, out=L.wqk[0])
+            L.wk = self._plus_one(sa.k_norm.weight, out=L.wqk[1])
             L.k_norm = sa.k_norm
             L.qk_eps = sa.q_norm.eps
             L.o = sa.o_proj.weight
         return L
+
+    def _plus_one(self, weight: Tensor, out: Tensor | None = None) -> Tensor:
+        """fp32 `1 + weight`, the scale Qwen3.5's RMSNorm applies, for the fused norm kernels. Unlike
+        the projections it is a copy, not the parameter's own storage, so it is tracked (sync_norms)."""
+        src = weight.detach()                    # shares the parameter's storage and version counter
+        if out is None:
+            out = torch.empty(src.shape, device=src.device, dtype=torch.float32)
+        out.copy_(src).add_(1.0)
+        self._norms.append([src, out, src._version])
+        return out
+
+    def sync_norms(self) -> None:
+        """Re-copy every norm scale whose parameter changed since it was copied, so a model trained
+        after packing (an optimizer step, `load_state_dict`) encodes with its current norms. A host-side
+        version check per call; the copy is in place, so captured graphs stay valid. Writes through
+        `.data` bypass the version counter: re-pack after those."""
+        for entry in self._norms:
+            src, out, seen = entry
+            if src._version != seen:
+                out.copy_(src).add_(1.0)
+                entry[2] = src._version
 
     def _check_qk(self, L: _Layer) -> float:
         """The fused q/k norm + RoPE kernel against the model's own RMSNorm + apply_rotary_pos_emb."""
@@ -478,14 +503,16 @@ class Qwen35Engine:
     def forward_packed(self, ids: Tensor, lengths: Sequence[int]) -> Tensor:
         """Eager, padding-free. ids: (T,) device ids back to back; lengths: host ints (all > 0).
         Returns the final-normed hidden states (T, hidden)."""
-        cu, pos = packed_layout_host(lengths)
-        d_pos, d_cu = self._stager.put([pos, cu])
-        x = F.embedding(ids.reshape(-1), self.embed)
-        cos, sin = self._rope(d_pos)
-        lay = _Layout(shape=(1, x.shape[0]), cos=cos, sin=sin, cu=d_cu, cu_cpu=cu, cu32=d_cu.to(torch.int32),
-                      max_len=int(max(lengths)), lengths=list(lengths), pos=d_pos)
-        with fla_tensor_cache():
-            return self._trunk(x, lay)
+        with torch.cuda.device(self.device):
+            self.sync_norms()
+            cu, pos = packed_layout_host(lengths)
+            d_pos, d_cu = self._stager.put([pos, cu])
+            x = F.embedding(ids.reshape(-1), self.embed)
+            cos, sin = self._rope(d_pos)
+            lay = _Layout(shape=(1, x.shape[0]), cos=cos, sin=sin, cu=d_cu, cu_cpu=cu, cu32=d_cu.to(torch.int32),
+                          max_len=int(max(lengths)), lengths=list(lengths), pos=d_pos)
+            with fla_tensor_cache():
+                return self._trunk(x, lay)
 
     def _use_recurrent(self, lay: _Layout) -> bool:
         return lay.static is None and lay.max_len <= self.gdn.recurrent_max_len     # eager only; see RECURRENT_MAX_LEN

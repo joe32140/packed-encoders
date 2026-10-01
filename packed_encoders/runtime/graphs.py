@@ -173,8 +173,9 @@ class PaddedGraphRunner:
     @torch.inference_mode()
     def capture(self, rows: int, seqs: Sequence[int]) -> None:
         """Pre-capture buckets (otherwise each is captured on first use)."""
-        for s in seqs:
-            self._get(rows, -(-int(s) // self.config.pad_to) * self.config.pad_to)
+        with torch.cuda.device(self.engine.device):
+            for s in seqs:
+                self._get(rows, -(-int(s) // self.config.pad_to) * self.config.pad_to)
 
     # ------------------------------------------------------------------ replay
     # Everything touching the static buffers runs under inference_mode, whatever the caller
@@ -209,6 +210,11 @@ class PaddedGraphRunner:
     def __call__(self, ids: Tensor, lengths: Sequence[int]) -> Tensor | None:
         """ids: (T,) device token ids of the sequences back to back; lengths: host ints.
         Returns (T, hidden) for exactly those tokens, or None if the batch is unbucketed."""
+        # Capture, replay and Triton launches use the current device, not the tensors': pin it.
+        with torch.cuda.device(self.engine.device):
+            return self._call(ids, lengths)
+
+    def _call(self, ids: Tensor, lengths: Sequence[int]) -> Tensor | None:
         groups = self.plan_groups(lengths)
         if groups is None:
             return None
@@ -280,6 +286,8 @@ class PaddedGraphRunner:
                     self._run(static)
             torch.cuda.current_stream().wait_stream(side)
             graph = torch.cuda.CUDAGraph()
-            with torch.cuda.graph(graph, pool=self._pool):
+            # Capture on this runner's stream: torch.cuda.graph's default capture stream is one per
+            # process, created on whichever device captured first, and entering it switches to that device.
+            with torch.cuda.graph(graph, pool=self._pool, stream=side):
                 self._run(static)
         return _Captured(graph=graph, static=static)

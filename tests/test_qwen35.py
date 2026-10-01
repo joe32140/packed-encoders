@@ -257,6 +257,99 @@ def test_share_and_unshare_restore_independent_weights(tiny):
         assert torch.equal(p.detach(), before[n]), n
 
 
+class _Adapted(torch.nn.Module):
+    """What peft puts in place of a Linear: `.weight` answers the *base* weight, so a reader of
+    `.weight` alone would drop the adapter."""
+
+    def __init__(self, base):
+        super().__init__()
+        self.base_layer = base
+
+    @property
+    def weight(self):
+        return self.base_layer.weight
+
+
+@pytest.mark.parametrize("layer,where", [(0, "mlp.down_proj"), (0, "linear_attn.out_proj"), (3, "self_attn.o_proj"),
+                                         (3, "self_attn.k_proj")])
+def test_unmerged_adapter_on_any_projection_is_refused(tiny, layer, where):
+    from packed_encoders.arch.qwen3_5.engine import Qwen35Engine
+    from packed_encoders.errors import UnsupportedTargetError
+
+    parent_name, attr = where.split(".")
+    parent = getattr(tiny.layers[layer], parent_name)
+    base = getattr(parent, attr)
+    before = {n: p.detach().clone() for n, p in tiny.named_parameters()}
+    setattr(parent, attr, _Adapted(base))
+    try:
+        with pytest.raises(UnsupportedTargetError, match="LoRA"):
+            Qwen35Engine(tiny, causal=True)
+    finally:
+        setattr(parent, attr, base)
+    for n, p in tiny.named_parameters():             # unchanged, and every merged row has its own storage back
+        assert torch.equal(p.detach(), before[n]), n
+    mlp = tiny.layers[0].mlp
+    assert mlp.gate_proj.weight.untyped_storage().data_ptr() != mlp.up_proj.weight.untyped_storage().data_ptr()
+
+
+def test_norms_trained_after_packing_reach_eager_and_captured_graphs(tiny):
+    from packed_encoders.arch.qwen3_5.engine import Qwen35Engine, unshare_rows
+    from packed_encoders.runtime.graphs import PaddedGraphConfig, PaddedGraphRunner
+
+    eng = Qwen35Engine(tiny, causal=True)
+    norms = [tiny.norm.weight, tiny.layers[0].input_layernorm.weight, tiny.layers[3].post_attention_layernorm.weight,
+             tiny.layers[3].self_attn.q_norm.weight, tiny.layers[3].self_attn.k_norm.weight]
+    saved = [w.detach().clone() for w in norms]
+    try:
+        lengths = [9, 70, 1, 33]
+        g = torch.Generator().manual_seed(2)
+        seqs = [torch.randint(0, 1024, (n,), generator=g).cuda() for n in lengths]
+        ids = torch.cat(seqs)
+        runner = PaddedGraphRunner(eng, PaddedGraphConfig(row_buckets=(4, 8), max_seq=128, max_tokens=1024))
+        stale = runner(ids, lengths).float()                         # captured with the packing-time norms
+        with torch.no_grad():                                        # what an optimizer step does: in place
+            for w in norms:
+                w.add_(torch.randn(w.shape, generator=g).to(w) * 0.3)
+        ref = torch.cat([_hf_hidden(tiny, s) for s in seqs])
+        assert F.cosine_similarity(stale, ref, dim=-1).mean().item() < 0.999     # the update matters
+        eng.sync_norms()                                             # the topk forward does this per call
+        for out in (runner(ids, lengths).float(), eng.forward_packed(ids, lengths).float()):
+            cos = F.cosine_similarity(out, ref, dim=-1)
+            assert cos.mean().item() > 0.999 and cos.min().item() > 0.99, (cos.mean().item(), cos.min().item())
+        assert runner.num_graphs == 1                                # same graph, refreshed in place
+    finally:
+        with torch.no_grad():
+            for w, s in zip(norms, saved):
+                w.copy_(s)
+        unshare_rows(eng.shared)
+
+
+@pytest.mark.skipif(torch.cuda.device_count() < 2, reason="needs two GPUs")
+def test_engine_runs_on_its_weights_device_not_the_current_one(tiny):
+    from packed_encoders.arch.qwen3_5.engine import Qwen35Engine, unshare_rows
+    from packed_encoders.runtime.graphs import PaddedGraphConfig, PaddedGraphRunner
+
+    model = copy.deepcopy(tiny).to("cuda:1")
+    torch.cuda.set_device(0)
+    lengths = [9, 70, 1, 33]
+    g = torch.Generator().manual_seed(3)
+    seqs = [torch.randint(0, 1024, (n,), generator=g).to("cuda:1") for n in lengths]
+    ids = torch.cat(seqs)
+    with torch.cuda.device(1):                                       # the reference, run the safe way
+        ref = torch.cat([_hf_hidden(model, s) for s in seqs])
+    eng = Qwen35Engine(model, causal=True)                           # probes, current device still 0
+    try:
+        runner = PaddedGraphRunner(eng, PaddedGraphConfig(row_buckets=(4, 8), max_seq=128, max_tokens=1024))
+        for out in (eng.forward_packed(ids, lengths), runner(ids, lengths), runner(ids, lengths)):
+            assert out.device == torch.device("cuda:1")
+            cos = F.cosine_similarity(out.float(), ref, dim=-1)
+            assert cos.mean().item() > 0.999 and cos.min().item() > 0.99, (cos.mean().item(), cos.min().item())
+        torch.cuda.synchronize(1)
+        assert torch.cuda.current_device() == 0
+    finally:
+        unshare_rows(eng.shared)
+
+
 # ---------------------------------------------------------------------------- topk end to end
 
 

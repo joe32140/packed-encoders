@@ -102,6 +102,7 @@ def _vectors(state: TopkState, hidden: Tensor) -> Tensor:
 
 
 def _encode_text(state: TopkState, ids: Tensor, lengths: list[int], *, graphs: bool) -> Tensor:
+    state.engine.sync_norms()                 # norms trained since packing reach the graphs too
     hidden = None
     if graphs and state.runner is not None and state.graph_enabled and not graphs_globally_disabled() \
             and not torch.is_autocast_enabled("cuda"):

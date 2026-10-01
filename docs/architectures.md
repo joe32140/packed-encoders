@@ -69,10 +69,17 @@ What the engine does (`arch/qwen3_5/engine.py`), all exact rewrites of the model
 `pe.validate(model)` runs the same gate and returns the report (`Qwen35Report`): which
 kernels were chosen, what was rejected and why, and the cosine to the model's own output.
 
-### LoRA
+### LoRA, training and devices
 
-Merge adapters before packing (`model = model.merge_and_unload()`): the engine reads plain
-dense weights, and a module carrying `lora_A` or a bias is refused with a message saying so.
+- **LoRA:** merge adapters before packing (`model = model.merge_and_unload()`). The engine reads
+  plain dense weights, so every projection it reads is checked, and one carrying an unmerged
+  adapter (a peft layer: `lora_A` or `base_layer`) or a bias is refused with a message saying so.
+- **Training after packing:** the projections, conv and gate parameters are the model's own
+  storage, so updates reach the engine as they happen. The fp32 `1 + w` norm scales are copies;
+  each call re-copies any whose parameter's version changed (an optimizer step,
+  `load_state_dict`), in place, so captured graphs stay valid. Writes through `.data` bypass
+  the version counter: re-pack after those.
+- **Devices:** the engine runs on its weights' device, whatever the current CUDA device is.
 
 ## Adding an architecture
 
