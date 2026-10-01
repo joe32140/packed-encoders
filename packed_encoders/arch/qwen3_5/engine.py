@@ -60,16 +60,23 @@ def fla_tensor_cache():
         fla.utils.FLA_DISABLE_TENSOR_CACHE = prev
 
 
-def _share_rows(linears: Sequence[nn.Linear], registry: list[nn.Linear]) -> Tensor:
-    """Concatenate the weights row-wise and re-point every parameter at its slice of the
-    result, so the merged GEMM weight and the HF parameters are one storage. Re-pointed
-    layers are appended to `registry` for `unshare_rows`."""
+def _require_plain(linears: Sequence[nn.Module]) -> None:
+    """The engine reads `.weight` and nothing else. A peft tuner layer exposes its *base* weight
+    there (BaseTunerLayer.weight), so an unmerged adapter would be silently dropped; refuse it,
+    and a bias, which would be dropped too."""
     for lin in linears:
-        if hasattr(lin, "lora_A") or getattr(lin, "bias", None) is not None:
+        if hasattr(lin, "lora_A") or hasattr(lin, "base_layer") or getattr(lin, "bias", None) is not None:
             raise UnsupportedTargetError(
                 f"{type(lin).__name__} carries a bias or an unmerged LoRA adapter; merge adapters "
                 "first (peft: model = model.merge_and_unload()) — packing reads plain dense weights"
             )
+
+
+def _share_rows(linears: Sequence[nn.Linear], registry: list[nn.Linear]) -> Tensor:
+    """Concatenate the weights row-wise and re-point every parameter at its slice of the
+    result, so the merged GEMM weight and the HF parameters are one storage. Re-pointed
+    layers are appended to `registry` for `unshare_rows`."""
+    _require_plain(linears)
     merged = torch.cat([lin.weight.detach() for lin in linears], 0)
     off = 0
     for lin in linears:
@@ -276,6 +283,7 @@ class Qwen35Engine:
             raise UnsupportedTargetError("only the dense SwiGLU MLP is supported (no MoE layers)")
         L.gate_up = _share_rows([mlp.gate_proj, mlp.up_proj], self.shared)
         L.inter = mlp.gate_proj.weight.shape[0]
+        _require_plain([mlp.down_proj, layer.linear_attn.out_proj if L.linear else layer.self_attn.o_proj])
         L.down = mlp.down_proj.weight
         if L.linear:
             la = layer.linear_attn
