@@ -8,7 +8,7 @@ architecture whether it patches that module. The first match installs its engine
 | name         | backbone                                                   | patched entry point        |
 |--------------|------------------------------------------------------------|----------------------------|
 | `modernbert` | ModernBERT, Ettin, mmBERT and their finetunes              | `ModernBertModel.forward`  |
-| `qwen3_5`    | Qwen3.5 hybrid (GatedDeltaNet + gated softmax attention): [topk-embed-v1-xsmall / -small](https://huggingface.co/topk-io) | `TopkEmbedModel.forward` |
+| `qwen3_5`    | Qwen3.5 hybrid (GatedDeltaNet + gated softmax attention): [topk-embed-v1-xsmall / -small](https://huggingface.co/topk-io), [pplx-embed-v2-context](https://huggingface.co/perplexity-ai/pplx-embed-v2-context-9b-preview), any stock HF Qwen3.5 | `TopkEmbedModel.forward`; `Qwen3_5Model.forward` / `Qwen3_5TextModel.forward` |
 
 Each architecture brings its own kernel toolchain, loaded only when a model of that
 architecture is packed: CuteDSL for ModernBERT, fla (flash-linear-attention) for Qwen3.5.
@@ -31,6 +31,26 @@ Requirements: topk's own stack (torch 2.11, transformers 5.9, `flash-linear-atte
 on an sm_80+ GPU. On torch 2.8 topk's shipped forward itself fails on short batches (its
 compiled flex attention), so there is no reference to validate against and `pack()` refuses.
 Image inputs and gradient-enabled calls fall through to the original forward.
+
+### Stock HF Qwen3.5 models (pplx-embed-v2-context)
+
+The same engine serves any model built on transformers' own `Qwen3_5TextModel` or
+`Qwen3_5Model` (subclasses included), through a second entry that keeps HF's contract:
+right-padded `input_ids` / `attention_mask` in, `last_hidden_state` out (pads as zeros).
+Attention is causal or bidirectional as `config.is_causal` says, exactly as HF builds its
+masks. The model's own pooling then runs unchanged:
+
+```python
+model = AutoModel.from_pretrained("perplexity-ai/pplx-embed-v2-context-9b-preview",
+                                  trust_remote_code=True, dtype=torch.bfloat16).to("cuda")
+pe.pack(model)
+chunk_embeddings = model.encode(doc_chunks)          # its own chunk pooling + int8, on the engine
+```
+
+Calls the engine can't serve exactly run the original forward: images, gradients, a KV cache
+(`past_key_values`, `use_cache=True`), explicit `position_ids` / `inputs_embeds`, extra outputs
+(`output_hidden_states`, ...), and left padding. pplx ships fp32 weights; the engine runs bf16,
+so load it in bf16 and check retrieval against fp32 for your data.
 
 What the engine does (`arch/qwen3_5/engine.py`), all exact rewrites of the model's math:
 
@@ -82,6 +102,11 @@ kernels were chosen, what was rejected and why, and the cosine to the model's ow
 - **Devices:** the engine runs on its weights' device, whatever the current CUDA device is.
 
 ## Adding an architecture
+
+An architecture is a *backbone*. A new model on a backbone that is already registered needs
+an entry inside that plugin, not a new registration: one function that finds the backbone in
+the model's wrapper and one patched forward that keeps the wrapper's contract
+(`arch/qwen3_5` has two, `topk` and `hf`). A new backbone is a new plugin:
 
 1. Implement the `Architecture` protocol (`arch/base.py`) in `arch/<name>/`:
    `match(module)` (exact: two plugins must never both match), `validate`, `pack`, `unpack`.

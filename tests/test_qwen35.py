@@ -1,11 +1,13 @@
-"""Qwen3.5 hybrid (GatedDeltaNet + gated attention) — kernels, attention probe, engine, topk entry.
+"""Qwen3.5 hybrid (GatedDeltaNet + gated attention) — kernels, attention probe, engine, both entries.
 
     pytest tests/test_qwen35.py -q                  # kernels + a tiny random Qwen3.5 (no download)
     PE_TEST_TOPK=1 pytest tests/test_qwen35.py -q   # + topk-embed-v1-xsmall end to end (downloads ~1.7 GB)
 
 The engine tests build a random 4-layer Qwen3.5 text model and compare the engine (causal, as
 the plain HF model is) with HF's own forward per sequence, packed and graphed: that covers the
-architecture path any Qwen3.5-based model takes, not just topk's wrapper.
+architecture path any Qwen3.5-based model takes, not just topk's wrapper. The `hf` entry tests
+pack that model, and a bidirectional `Qwen3_5Model` subclass shaped like pplx-embed-v2-context,
+through `pe.pack`.
 """
 
 from __future__ import annotations
@@ -146,24 +148,30 @@ def test_attention_probe_selects_a_passing_kernel(causal):
 # ---------------------------------------------------------------------------- engine on a tiny Qwen3.5
 
 
+TINY_TEXT = dict(
+    vocab_size=1024, hidden_size=256, intermediate_size=512, num_hidden_layers=4,
+    num_attention_heads=2, num_key_value_heads=1, head_dim=256,
+    linear_num_key_heads=4, linear_num_value_heads=8, linear_key_head_dim=32, linear_value_head_dim=32,
+    layer_types=["linear_attention", "linear_attention", "linear_attention", "full_attention"],
+    max_position_embeddings=4096,
+)
+
+
+def _randomized(model):
+    torch.manual_seed(0)
+    model = model.to("cuda", torch.bfloat16).eval()
+    for p in model.parameters():                     # random init is too small to exercise the kernels
+        p.data.normal_(0, 0.05) if p.dim() > 1 else None
+    return model
+
+
 @pytest.fixture(scope="module")
 def tiny():
     _shims()
     from transformers.models.qwen3_5.configuration_qwen3_5 import Qwen3_5TextConfig
     from transformers.models.qwen3_5.modeling_qwen3_5 import Qwen3_5TextModel
 
-    cfg = Qwen3_5TextConfig(
-        vocab_size=1024, hidden_size=256, intermediate_size=512, num_hidden_layers=4,
-        num_attention_heads=2, num_key_value_heads=1, head_dim=256,
-        linear_num_key_heads=4, linear_num_value_heads=8, linear_key_head_dim=32, linear_value_head_dim=32,
-        layer_types=["linear_attention", "linear_attention", "linear_attention", "full_attention"],
-        max_position_embeddings=4096,
-    )
-    torch.manual_seed(0)
-    model = Qwen3_5TextModel(cfg).to("cuda", torch.bfloat16).eval()
-    for p in model.parameters():                     # random init is too small to exercise the kernels
-        p.data.normal_(0, 0.05) if p.dim() > 1 else None
-    return model
+    return _randomized(Qwen3_5TextModel(Qwen3_5TextConfig(**TINY_TEXT)))
 
 
 def _hf_hidden(model, ids):
@@ -348,6 +356,78 @@ def test_engine_runs_on_its_weights_device_not_the_current_one(tiny):
         assert torch.cuda.current_device() == 0
     finally:
         unshare_rows(eng.shared)
+
+
+# ---------------------------------------------------------------------------- hf entry (stock Qwen3.5 models)
+
+
+def _contextual():
+    """A tiny bidirectional `Qwen3_5Model` subclass: pplx-embed-v2-context's shape (it subclasses
+    `Qwen3_5Model`, sets `is_causal: false`, and pools `last_hidden_state` itself)."""
+    from transformers.models.qwen3_5.configuration_qwen3_5 import Qwen3_5Config
+    from transformers.models.qwen3_5.modeling_qwen3_5 import Qwen3_5Model
+
+    class Contextual(Qwen3_5Model):
+        pass
+
+    vision = dict(depth=1, hidden_size=32, intermediate_size=64, num_heads=2, out_hidden_size=256,
+                  num_position_embeddings=16)
+    return _randomized(Contextual(Qwen3_5Config(text_config={**TINY_TEXT, "is_causal": False, "use_cache": False},
+                                                vision_config=vision)))
+
+
+@pytest.mark.parametrize("kind", ["text_causal", "contextual_bidirectional"])
+def test_hf_entry_packs_stock_models_and_keeps_their_contract(tiny, kind):
+    import packed_encoders as pe
+    from packed_encoders.state import ATTR
+
+    _shims()
+    model = copy.deepcopy(tiny) if kind == "text_causal" else _contextual()
+    g = torch.Generator().manual_seed(5)
+    lengths = [9, 70, 1, 33]
+    S = max(lengths)
+    ids = torch.randint(0, 1024, (len(lengths), S), generator=g).cuda()
+    mask = (torch.arange(S)[None] < torch.tensor(lengths)[:, None]).long().cuda()
+    left = mask.flip(1)
+
+    def run(m=mask, **kw):
+        with torch.no_grad():
+            return model(input_ids=ids, attention_mask=m, use_cache=False, **kw)
+
+    stock, stock_left = run().last_hidden_state, run(left).last_hidden_state
+    params_before = {n: p.detach().clone() for n, p in model.named_parameters()}
+
+    pe.pack(model)
+    state = getattr(model, ATTR)
+    assert state.entry == "hf" and state.engine.causal == (kind == "text_causal")
+    assert state.report.eager_cos_mean > 0.999
+
+    out = run()
+    real = mask.bool()
+    assert out.last_hidden_state.shape == stock.shape and out.last_hidden_state.dtype == stock.dtype
+    cos = F.cosine_similarity(out.last_hidden_state[real].float(), stock[real].float(), dim=-1)
+    assert cos.mean().item() > 0.999 and cos.min().item() > 0.99, (cos.mean().item(), cos.min().item())
+    assert not out.last_hidden_state[~real].any()            # pads come back as zeros
+    assert state.runner.num_graphs > 0
+    assert torch.equal(run(return_dict=False)[0], out.last_hidden_state)
+
+    # Calls the engine can't serve run the model's own forward, unchanged.
+    calls, original = [], state.original_forward
+    state.original_forward = lambda *a, **k: calls.append(1) or original(*a, **k)
+    with pytest.warns(UserWarning, match="original forward"):
+        fell = run(left).last_hidden_state                    # left padding
+    assert torch.allclose(fell, stock_left, atol=1e-3)
+    run(output_hidden_states=True)
+    with torch.enable_grad():
+        model(input_ids=ids, attention_mask=mask, use_cache=False)
+    assert len(calls) == 3
+    state.original_forward = original
+
+    pe.unpack(model)
+    assert getattr(model, ATTR, None) is None
+    for n, p in model.named_parameters():
+        assert torch.equal(p.detach(), params_before[n]), n
+    assert torch.allclose(run().last_hidden_state, stock, atol=1e-3)
 
 
 # ---------------------------------------------------------------------------- topk end to end
