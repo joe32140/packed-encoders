@@ -43,7 +43,7 @@ masks. The model's own pooling then runs unchanged:
 ```python
 model = AutoModel.from_pretrained("perplexity-ai/pplx-embed-v2-context-9b-preview",
                                   trust_remote_code=True, dtype=torch.bfloat16).to("cuda")
-pe.pack(model)
+pe.pack(model, cuda_graph=False)                     # a 9B is GPU-bound: graphs don't pay here (below)
 chunk_embeddings = model.encode(doc_chunks)          # its own chunk pooling + int8, on the engine
 ```
 
@@ -52,12 +52,14 @@ Calls the engine can't serve exactly run the original forward: images, gradients
 (`output_hidden_states`, ...), and left padding. pplx ships fp32 weights; the engine runs bf16,
 so load it in bf16 and check retrieval against fp32 for your data.
 
-**Memory on large models.** A CUDA graph's memory pool can't borrow from PyTorch's regular
-cache, so graphs cost activation memory on top of what eager batches leave cached. With a 9B
-model on a 48 GB GPU, the default buckets (up to 16k tokens) don't fit beside the weights. If
-a call runs out of GPU memory while graphs are held, the engine frees them, warns once, and
-continues eager. To keep graphs where they pay off (short, launch-bound batches such as
-queries), cap them: `pe.set_cuda_graph(model, True, config=PaddedGraphConfig(max_tokens=4096))`.
+**CUDA graphs and model size.** Graphs remove launch overhead, which is what limits a small
+model (topk's speedups come from them). A 9B model keeps the GPU busy on its own, and a graph
+runs every row padded to its bucket, so for pplx on an L40S graphs gained nothing on batch-8
+queries and halved batch-32 query throughput: pack large models with `cuda_graph=False`.
+Graphs also cost memory: their pool can't borrow from PyTorch's regular cache, and with a 9B
+on a 48 GB GPU the default buckets (up to 16k tokens) don't fit beside the weights. If a call
+runs out of GPU memory while graphs are held, the engine frees them, warns once, and continues
+eager.
 
 What the engine does (`arch/qwen3_5/engine.py`), all exact rewrites of the model's math:
 

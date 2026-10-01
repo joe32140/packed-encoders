@@ -167,8 +167,8 @@ def _drop_graphs(state: Qwen35State, reason: str) -> None:
     gc.collect()
     torch.cuda.empty_cache()
     warnings.warn(f"packed-encoders: out of GPU memory with CUDA graphs held ({reason}); dropped them and "
-                  "continuing without. To keep graphs for short batches only: pe.set_cuda_graph(model, True, "
-                  "config=PaddedGraphConfig(max_tokens=4096))", stacklevel=3)
+                  "continuing without. Large models gain little from graphs: pack with cuda_graph=False, or "
+                  "cap them with a smaller PaddedGraphConfig(max_tokens=...)", stacklevel=3)
 
 
 def _make_topk_forward(module: nn.Module, state: Qwen35State):
