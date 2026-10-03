@@ -1,8 +1,8 @@
-"""packed-encoders — fast, monkeypatching encoder runtimes, one plugin per architecture.
+"""packed-encoders — fast encoder runtimes composed and installed by engines.
 
 `pack(model)` locates the backbone inside a HF model, a SentenceTransformer, or a PyLate
 ColBERT, and installs a validated fast forward in place, so every framework on top
-inherits the speedup with no adapter. Architectures (`packed_encoders.arch`):
+inherits the speedup with no adapter. Curated engines (`packed_encoders.arch`):
 
 - ModernBERT / Ettin / mmBERT: CuteDSL LayerNorm, RoPE and GeGLU, cuBLAS GEMMs, packed
   attention with per-GPU dispatch; CUDA graphs optional (off by default).
@@ -17,7 +17,8 @@ loads when a model of that architecture is packed.
 
 from __future__ import annotations
 
-from packed_encoders.dispatch import no_cuda_graph, pack, set_cuda_graph, unpack, validate
+from packed_encoders.dispatch import get_engine, no_cuda_graph, pack, set_cuda_graph, set_train_cuda_graph, unpack, validate
+from packed_encoders.batch import PackedBatch
 from packed_encoders.errors import (
     PackedEncodersError,
     UnsupportedTargetError,
@@ -28,7 +29,6 @@ from packed_encoders.errors import (
 _LAZY = {
     "GraphConfig": ("packed_encoders.graph", "GraphConfig"),
     "TrainGraphConfig": ("packed_encoders.train_graph", "TrainGraphConfig"),
-    "set_train_cuda_graph": ("packed_encoders.train_graph", "set_train_cuda_graph"),
     "ValidationReport": ("packed_encoders.validate", "ValidationReport"),
 }
 
@@ -63,6 +63,8 @@ _keep_public_functions()
 
 
 __all__ = [
+    "PackedBatch",
+    "get_engine",
     "pack",
     "unpack",
     "validate",

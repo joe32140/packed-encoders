@@ -137,12 +137,13 @@ within the same model family.
 
 Parity thresholds are endpoint-specific:
 
-- Query endpoint: cosine similarity `>= 0.98`.
+- Query endpoint: cosine similarity `>= 0.997`.
 - Document endpoint: cosine similarity `>= 0.997`.
 
-The lower query floor accounts for the prepared CUDA graph path using fixed
-padding buckets rather than each batch's exact maximum length. The fully packed
-graph path should normally remain much closer to eager stock.
+Graph padding must not change which real tokens a sequence can attend to. The
+former 0.98 query allowance predates the Flash/CUDA graph padding fix and must not
+be used as a refactor gate. Check real-token hidden-state errors and sequence
+isolation separately; embedding cosine alone is insufficient.
 
 A failed parity check aborts the run instead of publishing the result JSON. The
 result is complete only when:

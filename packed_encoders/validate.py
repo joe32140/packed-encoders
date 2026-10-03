@@ -39,6 +39,7 @@ class ValidationReport:
     capability: tuple[int, int]
     cutlass_version: str
     cosine: dict[int, float] = field(default_factory=dict)
+    pieces: dict = field(default_factory=dict)
 
 
 def validate(target: object, **kwargs):
@@ -52,10 +53,11 @@ def validate(target: object, **kwargs):
 def _validate_modernbert(
     encoder: nn.Module,
     *,
+    pieces=None,
     seq_lens: tuple[int, ...] = DEFAULT_SEQ_LENS,
     cos_threshold: float = DEFAULT_COS_THRESHOLD,
 ) -> ValidationReport:
-    """The ModernBERT gates (unchanged behavior)."""
+    """Validate selected operations independently, then the authored composition."""
     params = ModernBertParams.from_hf_config(encoder.config)  # gate 1: architecture
     model_type = encoder.config.model_type
 
@@ -70,8 +72,13 @@ def _validate_modernbert(
 
     cutlass_version = _check_cutlass_toolchain(device)  # gate 3: JIT smoke
 
+    from packed_encoders.arch.modernbert_pieces import default_pieces
+
+    pieces = pieces if pieces is not None else default_pieces()
+    execution = pieces.bind()
     report = ValidationReport(model_type, capability, cutlass_version)
-    _check_numerics(encoder, params, device, seq_lens, cos_threshold, report)  # gate 4
+    report.pieces = pieces.validate(encoder)
+    _check_numerics(encoder, params, device, seq_lens, cos_threshold, report, execution=execution)  # gate 4
     return report
 
 
@@ -119,6 +126,7 @@ def _check_numerics(
     seq_lens: tuple[int, ...],
     cos_threshold: float,
     report: ValidationReport,
+    *, execution=None,
 ) -> None:
     dtype = next(encoder.parameters()).dtype
     if dtype not in (torch.float32, torch.bfloat16):
@@ -143,7 +151,7 @@ def _check_numerics(
             ids = torch.randint(5, vocab, (2, seq_len), generator=generator, device=device)
             mask = torch.ones((2, seq_len), dtype=torch.long, device=device)
             expected = oracle(ids, mask)
-            actual = forward.fused_forward(encoder, params, ids, mask)
+            actual = forward.fused_forward(encoder, params, ids, mask, execution=execution)
             cos = F.cosine_similarity(
                 expected.flatten().float(), actual.flatten().float(), dim=0
             ).item()

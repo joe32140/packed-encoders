@@ -123,11 +123,13 @@ class _TrainGraphRunner:
         params: ModernBertParams,
         config: TrainGraphConfig,
         backend: str = "sdpa",
+        *, execution=None,
     ):
         self._model = model
         self._params = params
         self._config = config
         self._backend = backend
+        self._execution = forward._execution_for(model, execution)
         self._weights = [p for p in model.parameters() if p.requires_grad]
         self._cache: "OrderedDict[tuple[int, int], _Captured]" = OrderedDict()
         self._device = next(model.parameters()).device
@@ -156,7 +158,7 @@ class _TrainGraphRunner:
 
     def _eager(self, input_ids: Tensor, attention_mask: Tensor | None) -> Tensor:
         return forward.fused_forward(
-            self._model, self._params, input_ids, attention_mask, backend=self._backend
+            self._model, self._params, input_ids, attention_mask, backend=self._backend, execution=self._execution
         )
 
     def _insert(self, key: tuple[int, int], captured: _Captured) -> None:
@@ -169,13 +171,13 @@ class _TrainGraphRunner:
         """The captured forward: the whole fused forward with grad enabled, capture-safe."""
         p = forward.prologue(
             self._model, self._params, static.input_ids, static.attention_mask,
-            dense_mask=True, capture_safe=True,
+            dense_mask=True, capture_safe=True, execution=self._execution,
         )
         return forward.core(
             self._model, self._params,
             p.x, p.cos_global, p.sin_global, p.cos_local, p.sin_local,
             p.full_mask, p.sliding_mask,
-            backend=self._backend,
+            backend=self._backend, execution=self._execution,
         )
 
     def _capture(self, b: int, s: int) -> _Captured:
@@ -286,11 +288,12 @@ def build_train_runner(
     params: ModernBertParams,
     config: TrainGraphConfig,
     backend: str = "sdpa",
+    *, execution=None,
 ) -> _TrainGraphRunner:
-    return _TrainGraphRunner(model, params, config, backend=backend)
+    return _TrainGraphRunner(model, params, config, backend=backend, execution=execution)
 
 
-def set_train_cuda_graph(
+def _set_modernbert_train_cuda_graph(
     model: object, enabled: bool, *, config: TrainGraphConfig | None = None
 ) -> None:
     """Turn the training-graph layer on or off after `pack()`. See the module
@@ -302,6 +305,12 @@ def set_train_cuda_graph(
     if enabled and state.train_graph_runner is None:
         state.train_graph_runner = build_train_runner(
             find_encoder(model), state.params, config or TrainGraphConfig(),
-            backend=state.attention_backend,
+            backend=state.attention_backend, execution=state.execution,
         )
     state.train_graph_enabled = enabled
+
+
+def set_train_cuda_graph(model: object, enabled: bool, *, config: TrainGraphConfig | None = None) -> None:
+    from packed_encoders.dispatch import set_train_cuda_graph as dispatch
+
+    dispatch(model, enabled, config=config)
