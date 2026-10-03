@@ -565,3 +565,121 @@ def test_topk_adapter_delegates_grad_and_all_image_inputs(topk_tiny):
     assert len(calls) == 4
     pe.unpack(model)
     assert model.forward is original
+
+
+# Adapted from e97d004: use #5's topk adapter and prepared packed entry instead
+# of the stock HF entry introduced separately in #7.
+@pytest.mark.parametrize("entry,failure", [
+    ("packed", "capture"), ("topk", "capture"),
+    ("packed", "eager"), ("topk", "eager"), ("topk", "projection"),
+])
+def test_out_of_memory_with_graphs_drops_them_and_continues_eager(topk_tiny, monkeypatch, entry, failure):
+    import weakref
+    import packed_encoders as pe
+    import packed_encoders.arch.qwen3_5 as qwen
+    from packed_encoders.runtime.graphs import PaddedGraphConfig
+
+    model = topk_tiny
+    g = torch.Generator().manual_seed(6)
+    ids = torch.randint(0, 1024, (3, 40), generator=g).cuda()
+    feats = dict(input_ids=ids, attention_mask=torch.ones_like(ids), packed_ids=ids.flatten(),
+                 position_ids=torch.arange(40, device=ids.device).repeat(3),
+                 cu_seqlens=torch.arange(4, device=ids.device, dtype=torch.int32) * 40,
+                 seq_idx=torch.arange(3, device=ids.device).repeat_interleave(40))
+    batch = pe.PackedBatch(ids.flatten(), host_lengths=(40, 40, 40))
+    with torch.no_grad():
+        stock = (model(**feats) if entry == "topk" else
+                 torch.cat([_hf_hidden(model.model.language_model, row) for row in ids]))
+    cfg = PaddedGraphConfig(row_buckets=(3,), max_seq=64, max_tokens=192)
+    pe.pack(model, cuda_graph=cfg, validate=False)
+    packed = pe.get_engine(model)
+    state = packed.state
+
+    def run():
+        return model(**feats) if entry == "topk" else packed.forward_packed(batch)
+
+    # Hold a real graph before injecting OOM; the failing capture uses a new bucket.
+    with torch.no_grad():
+        packed.forward_packed(pe.PackedBatch(ids[:, :8].flatten(), host_lengths=(8, 8, 8)))
+    assert state.runner.num_graphs == 1
+    runner_ref = weakref.ref(state.runner)
+    failed_tensor = []
+    calls = []
+
+    def oom(*a, **k):
+        calls.append(1)
+        temporary = torch.empty(16, device=ids.device)
+        failed_tensor.append(weakref.ref(temporary))
+        raise torch.OutOfMemoryError("CUDA out of memory. (simulated)")
+
+    if failure == "capture":
+        state.runner._capture = oom
+    else:
+        original = state.engine.forward_packed if failure == "eager" else qwen._vectors
+
+        def fail_once(*a, **k):
+            if not calls:
+                return oom(*a, **k)
+            # The traceback and graph runner must be gone before eager retry.
+            assert runner_ref() is None and failed_tensor[0]() is None
+            return original(*a, **k)
+
+        if failure == "eager":
+            # Disabled graphs still hold memory that the eager path may need.
+            pe.set_cuda_graph(model, False)
+            monkeypatch.setattr(state.engine, "forward_packed", fail_once)
+        else:
+            monkeypatch.setattr(qwen, "_vectors", fail_once)
+
+    with pytest.warns(UserWarning, match="dropped them"), torch.no_grad():
+        out = run()
+    assert len(calls) == 1
+    assert state.runner is None and not packed.graph_enabled
+    assert runner_ref() is None and failed_tensor[0]() is None
+    cos = F.cosine_similarity(out.float(), stock.float(), dim=-1)
+    assert cos.mean().item() > 0.999
+
+    with torch.no_grad():
+        again = run()
+    torch.testing.assert_close(again, out)
+    assert state.runner is None
+    with monkeypatch.context() as patch:
+        patch.setattr(state.engine, "forward_packed", oom)
+        with pytest.raises(torch.OutOfMemoryError), torch.no_grad():
+            run()                   # no graphs left: a real OOM propagates
+
+    pe.set_cuda_graph(model, True, config=cfg)
+    with torch.no_grad():
+        restored = run()
+    assert packed.graph_enabled and state.runner.num_graphs > 0
+    assert F.cosine_similarity(restored.float(), stock.float(), dim=-1).mean() > 0.999
+    pe.unpack(model)
+
+
+def test_graph_recovery_does_not_swallow_errors_or_repeat_eager_retry(topk_tiny, monkeypatch):
+    import packed_encoders as pe
+    from packed_encoders.runtime.graphs import PaddedGraphConfig
+
+    pe.pack(topk_tiny, validate=False, cuda_graph=PaddedGraphConfig(max_tokens=128))
+    packed = pe.get_engine(topk_tiny)
+    batch = pe.PackedBatch(torch.arange(8, device="cuda"), host_lengths=(8,))
+
+    def other_error(*a, **k):
+        raise RuntimeError("unrelated failure")
+
+    packed.state.runner._capture = other_error
+    with pytest.raises(RuntimeError, match="unrelated failure"), torch.no_grad():
+        packed.forward_packed(batch)
+    assert packed.graph_enabled and packed.state.runner is not None
+
+    calls = []
+    def oom(*a, **k):
+        calls.append(1)
+        raise torch.OutOfMemoryError("simulated")
+
+    packed.state.runner._capture = oom
+    monkeypatch.setattr(packed.state.engine, "forward_packed", oom)
+    with pytest.warns(UserWarning, match="dropped them"), pytest.raises(torch.OutOfMemoryError), torch.no_grad():
+        packed.forward_packed(batch)
+    assert len(calls) == 2           # one failed capture and one failed eager attempt
+    assert packed.state.runner is None and not packed.graph_enabled

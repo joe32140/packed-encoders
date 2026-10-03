@@ -17,6 +17,7 @@ fla (flash-linear-attention) is imported only when a Qwen3.5 model is actually p
 
 from __future__ import annotations
 
+import gc
 import warnings
 from dataclasses import dataclass, field
 from typing import Any
@@ -103,7 +104,7 @@ def _vectors(state: TopkState, hidden: Tensor) -> Tensor:
     return F.normalize(v, p=2, dim=-1) if state.normalize else v
 
 
-def _hidden(state: TopkState, ids: Tensor, lengths, *, graphs: bool) -> Tensor:
+def _hidden_once(state: TopkState, ids: Tensor, lengths, *, graphs: bool) -> Tensor:
     state.engine.sync_norms()                 # norms trained since packing reach the graphs too
     hidden = None
     if graphs and state.runner is not None and state.graph_enabled and not graphs_globally_disabled() \
@@ -114,8 +115,37 @@ def _hidden(state: TopkState, ids: Tensor, lengths, *, graphs: bool) -> Tensor:
     return hidden
 
 
+def _with_graph_recovery(state: TopkState, forward) -> Tensor:
+    # Keep each attempt in its own frame so failed outputs and the exception's
+    # traceback release their allocations before graph cleanup and eager retry.
+    for attempt in (0, 1):
+        try:
+            return forward()
+        except torch.OutOfMemoryError as exc:
+            if attempt or state.runner is None:
+                raise
+            reason = (str(exc).splitlines() or ["CUDA out of memory"])[0][:160]
+        _drop_graphs(state, reason)          # outside the handler: its traceback would keep the graphs alive
+
+
+def _drop_graphs(state: TopkState, reason: str) -> None:
+    """Graphs are an optimisation, and their private memory pool can't lend to the eager path: out of
+    GPU memory with graphs held, free them all and continue eager."""
+    with torch.cuda.device(state.engine.device):
+        state.runner, state.graph_enabled = None, False
+        gc.collect()
+        torch.cuda.empty_cache()
+    warnings.warn(f"packed-encoders: out of GPU memory with CUDA graphs held ({reason}); dropped them and "
+                  "continuing without. Disable graphs with cuda_graph=False or reduce the buckets with "
+                  "PaddedGraphConfig(max_tokens=...).", stacklevel=3)
+
+
+def _hidden(state: TopkState, ids: Tensor, lengths, *, graphs: bool) -> Tensor:
+    return _with_graph_recovery(state, lambda: _hidden_once(state, ids, lengths, graphs=graphs))
+
+
 def _encode_text(state: TopkState, ids: Tensor, lengths, *, graphs: bool) -> Tensor:
-    return _vectors(state, _hidden(state, ids, lengths, graphs=graphs))
+    return _with_graph_recovery(state, lambda: _vectors(state, _hidden_once(state, ids, lengths, graphs=graphs)))
 
 
 def _make_topk_forward(module: nn.Module, state: TopkState):

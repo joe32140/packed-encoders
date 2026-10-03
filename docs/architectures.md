@@ -206,6 +206,16 @@ Graph configuration uses `PaddedGraphConfig`. Omitted or `None` means graphs on;
 changes require unpacking. Training capture and ModernBERT's sequence-cutoff
 option are rejected rather than ignored. `set_train_cuda_graph(False)` is a no-op.
 
+**Graph memory.** The runner releases unused warmup allocations before capture.
+If a Qwen hidden-state or topk projection call runs out of GPU memory while a graph
+runner is held, the engine drops the runner, disables graphs, warns, and retries
+once eagerly. Cleanup runs on the weights' device. An OOM without a runner, or on
+the retry, propagates. Graphs stay disabled until explicitly re-enabled with
+`pe.set_cuda_graph(model, True, config=PaddedGraphConfig(...))`. Use smaller buckets
+or `cuda_graph=False` when graphs consume too much memory; recovery does not make
+an oversized eager workload fit. Pack-time graph validation still fails if it
+cannot complete; it does not silently skip validation.
+
 Only independent, bias-free dense projections are supported. Unmerged adapters,
 MoE and tied/aliased backbone parameter storage are rejected. Aliasing is checked
 before any mutation. Prepared projections share their merged storage with the
