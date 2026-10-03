@@ -4,7 +4,7 @@ Same math as the model, fewer and fatter kernels:
 
 - merged projections: GDN q|k|v|z|b|a, attention q|gate|k|v, MLP gate|up — one GEMM each.
   The merged weight *is* the HF weight: each HF Linear's parameter is re-pointed at its row
-  range of the merged buffer, so packing costs no extra memory (`unpack()` separates them).
+  range of the merged buffer, so packing costs no extra persistent projection storage (`unpack()` separates them).
 - GatedDeltaNet through fla with the decay gate (A_log, dt_bias), beta sigmoid, and q/k L2
   norm inside the kernel: the chunked kernel in graphs and for long eager batches, the fused
   recurrent one (a single launch) for short eager batches. Both are probed at build time against
@@ -34,13 +34,12 @@ from torch import Tensor, nn
 
 import fla.utils
 from fla.modules import FusedRMSNormGated
-from fla.modules.activations import swiglu
 from fla.modules.convolution import causal_conv1d
-from fla.modules.layernorm import rms_norm
 from fla.ops.gated_delta_rule import chunk_gated_delta_rule, fused_recurrent_gated_delta_rule
 
 from packed_encoders.arch.qwen3_5.kernels import conv_split, gated_rms_norm, qk_norm_rope, qk_norm_rope_pair, sigmoid_gate
 from packed_encoders.errors import UnsupportedTargetError, ValidationError
+from packed_encoders.pieces.hybrid import reference_delta as _gdn_reference
 from packed_encoders.runtime.attention import AttentionChoice, select_attention
 from packed_encoders.runtime.graphs import PaddedStatic
 from packed_encoders.runtime.staging import PinnedStager, packed_layout_host
@@ -87,11 +86,26 @@ def _share_rows(linears: Sequence[nn.Linear], registry: list[nn.Linear]) -> Tens
     return merged
 
 
-def unshare_rows(registry: list[nn.Linear]) -> None:
-    """Undo `_share_rows`: every re-pointed parameter gets its own storage back."""
+def unshare_rows(registry: list[nn.Linear], *, rollback: bool = False) -> None:
+    """Restore independent parameter storage, retaining live values and identities.
+
+    Shared source parameters are rejected before preparation. Restoring independent
+    storage therefore restores the accepted aliasing contract too. Addresses can change;
+    callers must not retain pre-pack tensor views or external graphs across pack/unpack.
+    """
     for lin in registry:
         lin.weight.data = lin.weight.data.clone()
     registry.clear()
+
+
+def _require_independent_parameters(model: nn.Module) -> None:
+    """Reject aliasing before any re-pointing; merged projections must be independent."""
+    seen = set()
+    for name, param in model.named_parameters(remove_duplicate=False):
+        key = (param.device, param.untyped_storage().data_ptr())
+        if key in seen:
+            raise UnsupportedTargetError(f"Qwen3.5 requires independent parameter storage; {name} is tied or aliased")
+        seen.add(key)
 
 
 GDN_PROBE_TOLERANCE = 3e-2     # max |kernel - fp32 recurrence|, relative to the recurrence's max |output|
@@ -127,23 +141,6 @@ class GdnChoice:
     errors: dict[str, float]       # kernel -> worst relative error over the packed and padded probes
     rejected: dict[str, str]
     recurrent_max_len: int         # 0: the chunked kernel for every length
-
-
-def _gdn_reference(q, k, v, g, beta, lengths):
-    """The gated delta rule in fp32, token by token (fla's naive recurrence); q/k already at the
-    value-head count, g in log space. What both fla kernels are held to."""
-    q, k = F.normalize(q.float(), dim=-1) * q.shape[-1] ** -0.5, F.normalize(k.float(), dim=-1)
-    v, g, beta = v.float(), g.float(), beta.float()
-    out, start = torch.empty_like(v), 0
-    for n in lengths:
-        h = v.new_zeros(v.shape[1], k.shape[-1], v.shape[-1])            # (HV, K, V)
-        for t in range(start, start + n):
-            h = h * g[t].exp()[:, None, None]
-            u = (v[t] - torch.einsum("hk,hkv->hv", k[t], h)) * beta[t][:, None]
-            h = h + k[t][:, :, None] * u[:, None, :]
-            out[t] = torch.einsum("hk,hkv->hv", q[t], h)
-        start += n
-    return out
 
 
 def select_gdn(L: "_Layer", device: torch.device, dtype: torch.dtype, recurrent_max_len: int) -> GdnChoice:
@@ -233,7 +230,12 @@ class _Layout:
 
 class Qwen35Engine:
     def __init__(self, text_model: nn.Module, *, causal: bool, attention_order: Sequence[str] | None = None,
-                 recurrent_max_len: int = RECURRENT_MAX_LEN, fused: bool = True):
+                 recurrent_max_len: int = RECURRENT_MAX_LEN, fused: bool = True, pieces=None):
+        from packed_encoders.arch.qwen3_5.pieces import default_pieces
+
+        self.composition = pieces or default_pieces()
+        self.ops = self.composition.bind()
+        _require_independent_parameters(text_model)
         cfg = text_model.config
         self.tm, self.cfg, self.causal = text_model, cfg, causal
         self.embed = text_model.embed_tokens.weight
@@ -269,10 +271,10 @@ class Qwen35Engine:
                 self.fusion_errors: dict[str, float] = {}
                 self.fusion_rejected: dict[str, str] = {}
                 self.fused = fused and self._check_fusions(gdn, attn)
-        except Exception:
-            unshare_rows(self.shared)            # leave the model exactly as we found it
+                self._stager = PinnedStager(self.device)
+        except BaseException:
+            unshare_rows(self.shared, rollback=True)            # leave the model exactly as we found it
             raise
-        self._stager = PinnedStager(self.device)
 
     # ------------------------------------------------------------------ weights
     def _prepare(self, layer: nn.Module, kind: str) -> _Layer:
@@ -433,20 +435,20 @@ class Qwen35Engine:
         if not self.fused:
             return self._gdn_unfused(L, h, lay)
         B, S = lay.shape
-        proj = F.linear(h, L.in_proj)
+        proj = self.ops.linear(h, L.in_proj)
         # one launch: q|k|v conv + SiLU, and b|a copied out contiguous (fla would copy each)
-        q, k, v, b, a = conv_split(proj, L.conv_w, L.conv_b, lay.pos, L.kd, L.vd, L.gate_off, L.nv, L.nv, True)
+        q, k, v, b, a = self.ops.conv_split(proj, L.conv_w, L.conv_b, lay.pos, L.kd, L.vd, L.gate_off, L.nv, L.nv, True)
         q, k, v = q.view(B, S, L.nk, L.hk), k.view(B, S, L.nk, L.hk), v.view(B, S, L.nv, L.hv)
         if self.gdn.expand_gva:
             q, k = q.repeat_interleave(L.nv // L.nk, dim=2), k.repeat_interleave(L.nv // L.nk, dim=2)
-        kernel = _recurrent if self._use_recurrent(lay) else _chunk
-        o = kernel(q, k, v, a.view(B, S, L.nv), b.view(B, S, L.nv), L, lay.cu, lay.cu_cpu)
+        kernel = self.ops.gdn_recurrent if self._use_recurrent(lay) else self.ops.gdn_chunk
+        o = kernel(q, k, v, a.view(B, S, L.nv), b.view(B, S, L.nv), L.A_log, L.dt_bias, lay.cu, lay.cu_cpu)
         z = proj[:, L.bounds[-1]: L.bounds[-1] + L.nv * L.hv].view(-1, L.nv, L.hv)     # read in place
-        return F.linear(gated_rms_norm(o.view(-1, L.nv, L.hv), z, L.gn_w, L.gn_eps), L.out)
+        return self.ops.linear(self.ops.gated_rms_norm(o.view(-1, L.nv, L.hv), z, L.gn_w, L.gn_eps), L.out)
 
     def _gdn_unfused(self, L: _Layer, h: Tensor, lay: _Layout) -> Tensor:
         B, S = lay.shape
-        qkv, z, b, a = F.linear(h, L.in_proj).split(L.split_in, dim=-1)
+        qkv, z, b, a = self.ops.linear(h, L.in_proj).split(L.split_in, dim=-1)
         qkv = qkv.view(B, S, -1)
         q, k, v = (causal_conv1d(x=qkv[..., i:j], weight=w, bias=bias, activation=L.act, cu_seqlens=lay.cu,
                                  cu_seqlens_cpu=lay.cu_cpu)[0]
@@ -454,14 +456,14 @@ class Qwen35Engine:
         q, k, v = q.reshape(B, S, L.nk, L.hk), k.reshape(B, S, L.nk, L.hk), v.reshape(B, S, L.nv, L.hv)
         if self.gdn.expand_gva:                       # this fla lacks grouped value heads: expand as the model does
             q, k = q.repeat_interleave(L.nv // L.nk, dim=2), k.repeat_interleave(L.nv // L.nk, dim=2)
-        kernel = _recurrent if self._use_recurrent(lay) else _chunk
-        o = kernel(q, k, v, a.reshape(B, S, L.nv), b.reshape(B, S, L.nv), L, lay.cu, lay.cu_cpu)
+        kernel = self.ops.gdn_recurrent if self._use_recurrent(lay) else self.ops.gdn_chunk
+        o = kernel(q, k, v, a.reshape(B, S, L.nv), b.reshape(B, S, L.nv), L.A_log, L.dt_bias, lay.cu, lay.cu_cpu)
         o = L.gnorm(o.reshape(-1, L.hv), z.reshape(-1, L.hv))
-        return F.linear(o.reshape(h.shape[0], -1), L.out)
+        return self.ops.linear(o.reshape(h.shape[0], -1), L.out)
 
     def _attn(self, L: _Layer, h: Tensor, lay: _Layout) -> Tensor:
         N, nq, nkv, hd = h.shape[0], L.nq, L.nkv, L.hd
-        out = F.linear(h, L.qkv)
+        out = self.ops.linear(h, L.qkv)
         qw = nq * (2 * hd if L.gated else hd)
         if L.gated:
             qg = out[:, :qw].view(N, nq, 2 * hd)
@@ -471,31 +473,31 @@ class Qwen35Engine:
         k = out[:, qw: qw + nkv * hd].view(N, nkv, hd)
         v = out[:, qw + nkv * hd:].view(N, nkv, hd)
         if self.fused:
-            q, k = qk_norm_rope_pair(out, 0, q.stride(1), nq, qw, hd, nkv, L.wqk, lay.cos, lay.sin, L.qk_eps)
+            q, k = self.ops.qk_norm_rope_pair(out, 0, q.stride(1), nq, qw, hd, nkv, L.wqk, lay.cos, lay.sin, L.qk_eps)
         else:
-            q, k = qk_norm_rope(q, L.wq, lay.cos, lay.sin, L.qk_eps), qk_norm_rope(k, L.wk, lay.cos, lay.sin, L.qk_eps)
+            q, k = self.ops.qk_norm_rope(q, L.wq, lay.cos, lay.sin, L.qk_eps), self.ops.qk_norm_rope(k, L.wk, lay.cos, lay.sin, L.qk_eps)
         if lay.static is None:
-            o = self.attention.packed(q, k, v, lay.cu32, lay.max_len, lay.lengths, self.causal)
+            o = self.ops.attention_packed(self.attention, q, k, v, lay.cu32, lay.max_len, lay.lengths, self.causal)
         else:
-            o = self.attention.padded(q, k, v, lay.static, self.causal)
+            o = self.ops.attention_padded(self.attention, q, k, v, lay.static, self.causal)
         if gate is None:
-            return F.linear(o.reshape(N, nq * hd), L.o)
+            return self.ops.linear(o.reshape(N, nq * hd), L.o)
         if self.fused:
-            return F.linear(sigmoid_gate(o.view(N, nq, hd), gate), L.o)
-        return F.linear((o * torch.sigmoid(gate)).reshape(N, nq * hd), L.o)
+            return self.ops.linear(self.ops.sigmoid_gate(o.view(N, nq, hd), gate), L.o)
+        return self.ops.linear((o * torch.sigmoid(gate)).reshape(N, nq * hd), L.o)
 
     def _trunk(self, x: Tensor, lay: _Layout) -> Tensor:
         residual, delta, eps = x, None, self.eps
         for L in self.layers:
             if delta is None:
-                h = rms_norm(residual, L.w_in, None, eps=eps)
+                h = self.ops.rms_norm(residual, L.w_in, eps)
             else:
-                h, residual = rms_norm(delta, L.w_in, None, residual=residual, eps=eps, prenorm=True)
+                h, residual = self.ops.add_rms_norm(delta, residual, L.w_in, eps)
             mix = self._gdn(L, h, lay) if L.linear else self._attn(L, h, lay)
-            h, residual = rms_norm(mix, L.w_post, None, residual=residual, eps=eps, prenorm=True)
-            g, u = F.linear(h, L.gate_up).split(L.inter, dim=-1)
-            delta = F.linear(swiglu(g, u), L.down)
-        out, _ = rms_norm(delta, self.w_final, None, residual=residual, eps=eps, prenorm=True)
+            h, residual = self.ops.add_rms_norm(mix, residual, L.w_post, eps)
+            g, u = self.ops.linear(h, L.gate_up).split(L.inter, dim=-1)
+            delta = self.ops.linear(self.ops.swiglu(g, u), L.down)
+        out, _ = self.ops.add_rms_norm(delta, residual, self.w_final, eps)
         return out
 
     # ------------------------------------------------------------------ entry points

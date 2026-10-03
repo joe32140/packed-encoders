@@ -25,10 +25,11 @@ import torch
 import torch.nn.functional as F
 from torch import Tensor, nn
 
-from packed_encoders.errors import PackedEncodersError, UnsupportedTargetError, ValidationError
+from packed_encoders.errors import PackedEncodersError, ValidationError
 from packed_encoders.runtime.graphs import PaddedGraphConfig, PaddedGraphRunner, graphs_globally_disabled
 from packed_encoders.runtime.staging import PinnedStager
 from packed_encoders.state import ATTR
+from packed_encoders.engine import Capabilities, ModelBinding, ValidationResult
 
 MIN_CAPABILITY = (8, 0)   # bf16 tensor cores; fla's Triton kernels target sm_80+
 # Validation is a measurement on the actual device (engine vs the model's own forward), not a
@@ -69,6 +70,7 @@ class Qwen35Report:
     graph_cos_mean: float | None = None
     graph_cos_min: float | None = None
     notes: list[str] = field(default_factory=list)
+    pieces: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -101,7 +103,7 @@ def _vectors(state: TopkState, hidden: Tensor) -> Tensor:
     return F.normalize(v, p=2, dim=-1) if state.normalize else v
 
 
-def _encode_text(state: TopkState, ids: Tensor, lengths: list[int], *, graphs: bool) -> Tensor:
+def _hidden(state: TopkState, ids: Tensor, lengths, *, graphs: bool) -> Tensor:
     state.engine.sync_norms()                 # norms trained since packing reach the graphs too
     hidden = None
     if graphs and state.runner is not None and state.graph_enabled and not graphs_globally_disabled() \
@@ -109,13 +111,17 @@ def _encode_text(state: TopkState, ids: Tensor, lengths: list[int], *, graphs: b
         hidden = state.runner(ids, lengths)
     if hidden is None:
         hidden = state.engine.forward_packed(ids, lengths)
-    return _vectors(state, hidden)
+    return hidden
+
+
+def _encode_text(state: TopkState, ids: Tensor, lengths, *, graphs: bool) -> Tensor:
+    return _vectors(state, _hidden(state, ids, lengths, graphs=graphs))
 
 
 def _make_topk_forward(module: nn.Module, state: TopkState):
     def forward(input_ids, attention_mask, packed_ids, position_ids, cu_seqlens, seq_idx, pixel_values=None,
                 image_scatter_index=None, vision_inputs=None, return_dict=True):
-        if pixel_values is not None or torch.is_grad_enabled():
+        if any(x is not None for x in (pixel_values, image_scatter_index, vision_inputs)) or torch.is_grad_enabled():
             if not state.fallback_warned:
                 state.fallback_warned = True
                 warnings.warn("packed-encoders: image inputs and grad-enabled calls run topk's original forward",
@@ -140,11 +146,37 @@ def _make_topk_forward(module: nn.Module, state: TopkState):
     return forward
 
 
+class TopkEmbedAdapter:
+    name = "topk-embed-v1"
+
+    def bind(self, module: object) -> ModelBinding | None:
+        lm = _topk_text_model(module)
+        return ModelBinding(self, module, lm) if lm is not None else None
+
+    def install(self, binding: ModelBinding, packed) -> None:
+        setattr(binding.patch_target, ATTR, packed.state)
+        binding.patch_target.forward = _make_topk_forward(binding.patch_target, packed.state)
+
+
+def _check_options(options):
+    unknown = options.keys() - {"cuda_graph", "train_cuda_graph", "attention_backend", "validate"}
+    if unknown:
+        raise PackedEncodersError(f"unsupported Qwen3.5 options: {sorted(unknown)}")
+    graph = options.get("cuda_graph")
+    if graph is not None and not isinstance(graph, (bool, PaddedGraphConfig)):
+        raise PackedEncodersError("Qwen3.5 graphs take a bool or PaddedGraphConfig")
+    if options.get("train_cuda_graph") not in (None, False):
+        raise PackedEncodersError("training graphs are not implemented for Qwen3.5")
+    if options.get("attention_backend") not in _BACKENDS:
+        raise PackedEncodersError(f"unsupported Qwen3.5 attention_backend: {options['attention_backend']!r}")
+
+
 class Qwen35Hybrid:
     name = "qwen3_5"
+    adapters = (TopkEmbedAdapter(),)
 
-    def match(self, module: nn.Module) -> bool:
-        return _topk_text_model(module) is not None
+    def __init__(self, *, pieces=None):
+        self.pieces = pieces
 
     # ------------------------------------------------------------------ gates
     @staticmethod
@@ -164,13 +196,13 @@ class Qwen35Hybrid:
             import fla
             from fla.ops.gated_delta_rule import chunk_gated_delta_rule  # noqa: F401
         except ImportError as exc:
-            raise ValidationError("Qwen3.5 packing needs flash-linear-attention (pip install "
-                                  "'packed-encoders[qwen3_5]')") from exc
+            raise ValidationError("Qwen3.5 packing needs flash-linear-attention; see docs/torch-2.11-review.md "
+                                  "for the topk checkpoint environment") from exc
         # The kernel flags pass through fla's **kwargs, so no signature check: the engine probes the
         # kernels numerically when it is built (engine.select_gdn).
         return device, fla.__version__
 
-    def validate(self, module: nn.Module, *, batches: tuple[tuple[int, ...], ...] = ((7, 129, 300, 64), (3, 21, 30)),
+    def _validate(self, module: nn.Module, *, batches: tuple[tuple[int, ...], ...] = ((7, 129, 300, 64), (3, 21, 30)),
                  graphs: bool = True, _engine=None, _state: TopkState | None = None) -> Qwen35Report:
         """Build (or reuse) the engine and compare it with the model's own forward on random text
         rows, on this device, eager and graphed. The default batches cover both GatedDeltaNet
@@ -195,6 +227,8 @@ class Qwen35Hybrid:
                 gdn_recurrent_max_len=engine.gdn.recurrent_max_len if engine.gdn else 0,
                 batches=tuple(tuple(b) for b in batches), eager_cos_min=1.0, fused=engine.fused,
                 fusion_errors=dict(engine.fusion_errors), fusion_rejected=dict(engine.fusion_rejected))
+            with torch.cuda.device(device):
+                report.pieces = engine.composition.validate(engine)
             oracle = state.original_forward if state is not None else module.forward
             probe_state = state or TopkState(
                 arch=self.name, engine=engine, original_forward=oracle, runner=None, graph_enabled=False,
@@ -206,13 +240,13 @@ class Qwen35Hybrid:
             if built_here:
                 from packed_encoders.arch.qwen3_5.engine import unshare_rows
 
-                unshare_rows(engine.shared)
+                unshare_rows(engine.shared, rollback=True)
         return report
 
     def _check_numerics(self, module, oracle, state: TopkState, lengths, graphs, report: Qwen35Report) -> None:
         device = state.head.device
         g = torch.Generator().manual_seed(0)
-        seqs = [torch.randint(1000, 150000, (n,), generator=g) for n in lengths]
+        seqs = [torch.randint(0, state.engine.cfg.vocab_size, (n,), generator=g) for n in lengths]
         B, S = len(seqs), max(lengths)
         lens = torch.tensor(lengths)
         packed = torch.cat(seqs)
@@ -257,60 +291,126 @@ class Qwen35Hybrid:
                                           f"per-token cosine mean {mean:.6f} min {low:.5f}")
 
     # ------------------------------------------------------------------ install
-    @staticmethod
-    def _engine(module: nn.Module, attention_backend: str | None):
+    def _engine(self, module: nn.Module, attention_backend: str | None):
         from packed_encoders.arch.qwen3_5.engine import Qwen35Engine
 
         if attention_backend not in _BACKENDS:
             raise PackedEncodersError(f"attention_backend for Qwen3.5 must be one of {sorted(map(str, _BACKENDS))}")
         lm = _topk_text_model(module)
         return Qwen35Engine(lm, causal=bool(getattr(lm, "document_causal", False)),
-                            attention_order=_BACKENDS[attention_backend])
+                            attention_order=_BACKENDS[attention_backend], pieces=self.pieces)
 
-    def pack(self, target: object, module: nn.Module, *, cuda_graph: bool | PaddedGraphConfig | None = None,
-             attention_backend: str | None = None, validate: bool = True, train_cuda_graph: Any = False,
-             **ignored: Any) -> TopkState:
-        existing = getattr(module, ATTR, None)
-        if existing is not None:                     # idempotent; an explicit cuda_graph still applies
-            if cuda_graph is not None:
-                existing.set_cuda_graph(bool(cuda_graph),
-                                        cuda_graph if isinstance(cuda_graph, PaddedGraphConfig) else None)
-            return existing
-        if train_cuda_graph:
-            raise PackedEncodersError("training graphs are not implemented for Qwen3.5 (inference only)")
-        if cuda_graph is not None and not isinstance(cuda_graph, (bool, PaddedGraphConfig)):
-            raise PackedEncodersError("Qwen3.5 graphs take cuda_graph=True/False or a runtime.PaddedGraphConfig")
+    def validate(self, binding: ModelBinding, **kwargs) -> ValidationResult:
+        return ValidationResult(self.name, self._validate(binding.patch_target, **kwargs))
+
+    def prepare(self, binding: ModelBinding, options):
+        _check_options(options)
+        module = binding.patch_target
         self._require_env(module)
-        engine = self._engine(module, attention_backend)
-        use_graphs = cuda_graph is None or bool(cuda_graph)    # graphs are the point here: on by default
-        state = TopkState(
-            arch=self.name, engine=engine, original_forward=module.forward,
-            runner=PaddedGraphRunner(engine, cuda_graph if isinstance(cuda_graph, PaddedGraphConfig) else None)
-            if use_graphs else None,
-            graph_enabled=use_graphs, head=module.head.weight,
-            dim=module.config.output_dim or module.config.dim, normalize=bool(module.config.normalize),
-            stager=PinnedStager(engine.device))
+        # The adapter reads the head directly as a bias-free projection too.
+        from packed_encoders.arch.qwen3_5.engine import _require_plain, unshare_rows
+
+        _require_plain([module.head])
+        engine = self._engine(module, options.get("attention_backend"))
         try:
-            if validate:
-                state.report = self.validate(module, graphs=use_graphs, _engine=engine, _state=state)
-        except Exception:
-            from packed_encoders.arch.qwen3_5.engine import unshare_rows
-
-            unshare_rows(engine.shared)
+            graph = options.get("cuda_graph")
+            use_graphs = graph is None or bool(graph)
+            state = TopkState(
+                arch=self.name, engine=engine, original_forward=module.forward,
+                runner=PaddedGraphRunner(engine, graph if isinstance(graph, PaddedGraphConfig) else None)
+                if use_graphs else None,
+                graph_enabled=use_graphs, head=module.head.weight,
+                dim=module.config.output_dim or module.config.dim, normalize=bool(module.config.normalize),
+                stager=PinnedStager(engine.device))
+            packed = PackedQwen35(self, binding, state, options.get("attention_backend"))
+            if options.get("validate", True):
+                state.report = packed.validate(graphs=use_graphs).details
+            return packed
+        except BaseException:
+            unshare_rows(engine.shared, rollback=True)
             raise
-        setattr(module, ATTR, state)
-        module.forward = _make_topk_forward(module, state)
-        return state
 
-    def unpack(self, module: nn.Module) -> None:
-        state = getattr(module, ATTR, None)
-        if state is None:
+
+class PackedQwen35:
+    capabilities = Capabilities(inference_capture=True, original_forward_fallback=True)
+
+    def __init__(self, owner, binding, state, backend):
+        self.owner, self.binding, self.state = owner, binding, state
+        self.attention_backend = backend
+        self.composition = state.engine.composition
+        self.pieces = self.composition.all()
+        self._closed = False
+
+    def _require_open(self):
+        if self._closed:
+            raise PackedEncodersError("this packed engine has been closed; pack the model again")
+
+    @property
+    def graph_enabled(self):
+        return self.state.graph_enabled
+
+    @graph_enabled.setter
+    def graph_enabled(self, enabled):
+        self._require_open()
+        self.state.graph_enabled = enabled
+
+    def forward_packed(self, batch):
+        """Return final-normed hidden states, before the topk head and normalization.
+
+        Requires flat device int64 IDs and positive host_lengths. Positions restart
+        at zero for each sequence; omit other metadata (it is never silently ignored).
+        This entry is inference-only; the topk adapter owns the original-forward fallback.
+        """
+        self._require_open()
+        ids, lengths = batch.input_ids, batch.host_lengths
+        if torch.is_grad_enabled():
+            raise PackedEncodersError("Qwen3.5 forward_packed requires no_grad or inference_mode")
+        if ids.ndim != 1 or ids.dtype != torch.int64 or ids.device != self.state.engine.device:
+            raise PackedEncodersError("Qwen3.5 requires flat int64 token IDs on the weights' device")
+        if not lengths or any(type(n) is not int or n <= 0 for n in lengths) or sum(lengths) != ids.numel():
+            raise PackedEncodersError("Qwen3.5 requires positive host_lengths summing to the token count")
+        if batch.cu_seqlens is not None or batch.position_ids is not None or batch.max_seqlen is not None:
+            raise PackedEncodersError("Qwen3.5 takes host_lengths only; positions restart per sequence")
+        return _hidden(self.state, ids, lengths, graphs=True)
+
+    def validate(self, **kwargs):
+        self._require_open()
+        return ValidationResult(self.owner.name, self.owner._validate(
+            self.binding.patch_target, _engine=self.state.engine, _state=self.state, **kwargs))
+
+    def configure(self, options):
+        self._require_open()
+        _check_options(options)
+        if "attention_backend" in options and options["attention_backend"] != self.attention_backend:
+            raise PackedEncodersError("unpack before changing the prepared attention backend")
+        if "cuda_graph" in options and options["cuda_graph"] is not None:
+            graph = options["cuda_graph"]
+            self.set_cuda_graph(bool(graph), graph if isinstance(graph, PaddedGraphConfig) else None)
+
+    def set_cuda_graph(self, enabled, config=None):
+        self._require_open()
+        self.state.set_cuda_graph(enabled, config)
+
+    def set_train_cuda_graph(self, enabled, config=None):
+        self._require_open()
+        if enabled or config is not None:
+            raise PackedEncodersError("training graphs are not implemented for Qwen3.5")
+
+    def close(self, *, rollback=False):
+        if self._closed:
             return
         from packed_encoders.arch.qwen3_5.engine import unshare_rows
 
-        module.forward = state.original_forward
-        unshare_rows(state.engine.shared)
-        delattr(module, ATTR)
+        self.state.runner = None
+        self.state.graph_enabled = False
+        engine = self.state.engine
+        unshare_rows(engine.shared, rollback=rollback)
+        engine.layers.clear()
+        engine._norms.clear()
+        engine.w_final = None
+        engine._stager = None
+        self.state.stager = None
+        self._closed = True
 
 
-__all__ = ["Qwen35Hybrid", "Qwen35Report", "TopkState", "UnsupportedTargetError"]
+__all__ = ["Qwen35Hybrid", "Qwen35Report", "PackedQwen35", "TopkEmbedAdapter"]

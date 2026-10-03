@@ -15,6 +15,7 @@ from torch import Tensor, nn
 from transformers.modeling_outputs import BaseModelOutput
 
 from packed_encoders import ops
+from packed_encoders.engine import OMITTED
 from packed_encoders.config import ModernBertParams
 from packed_encoders.errors import PackedEncodersError
 from packed_encoders.forward import fused_forward
@@ -29,10 +30,11 @@ from packed_encoders.validate import _validate_modernbert as _validate
 def pack(
     target: object,
     *,
-    cuda_graph: bool | GraphConfig | None = None,
-    train_cuda_graph: bool | TrainGraphConfig = False,
-    cuda_graph_seq_cutoff: int = 64,
-    attention_backend: str | None = None,
+    engine=None,
+    cuda_graph=OMITTED,
+    train_cuda_graph=OMITTED,
+    cuda_graph_seq_cutoff=OMITTED,
+    attention_backend=OMITTED,
     validate: bool = True,
 ) -> object:
     """Install the fused-tail forward onto `target` and return the same object.
@@ -76,28 +78,28 @@ def pack(
     `validate` runs the hard gate during pack.
 
     Other architectures (see `packed_encoders.arch`) take the same call;
-    `cuda_graph=None` means that architecture's default (off for ModernBERT, on for Qwen3.5).
+    `cuda_graph=None` means that architecture's default (off for ModernBERT).
     """
     from packed_encoders.dispatch import pack as _dispatch_pack
 
     return _dispatch_pack(
-        target, cuda_graph=cuda_graph, train_cuda_graph=train_cuda_graph,
+        target, engine=engine, cuda_graph=cuda_graph, train_cuda_graph=train_cuda_graph,
         cuda_graph_seq_cutoff=cuda_graph_seq_cutoff, attention_backend=attention_backend,
         validate=validate,
     )
 
 
-def _pack_modernbert(
-    target: object,
+def _prepare_modernbert(
     encoder: nn.Module,
     *,
+    pieces=None,
     cuda_graph: bool | GraphConfig | None = None,
     train_cuda_graph: bool | TrainGraphConfig = False,
     cuda_graph_seq_cutoff: int = 64,
     attention_backend: str | None = None,
     validate: bool = True,
-) -> object:
-    """The ModernBERT body of `pack()` (unchanged behavior)."""
+) -> PatchState:
+    """Prepare the native state without installing a forward or mutating weights."""
     if cuda_graph is None:          # ModernBERT graphs stay opt-in
         cuda_graph = False
     if attention_backend is None:
@@ -108,16 +110,13 @@ def _pack_modernbert(
             f"{attention_backend!r}"
         )
 
-    existing = getattr(encoder, ATTR, None)
-    if existing is not None:  # idempotent — only (re)configure graphs if asked
-        if cuda_graph and existing.graph_runner is None:
-            _enable_graphs(encoder, existing, cuda_graph, cuda_graph_seq_cutoff)
-        if train_cuda_graph and existing.train_graph_runner is None:
-            _enable_train_graphs(encoder, existing, train_cuda_graph, cuda_graph_seq_cutoff)
-        return target
+    from packed_encoders.arch.modernbert_pieces import default_pieces
 
+    pieces = pieces if pieces is not None else default_pieces()
+    execution = pieces.bind()
+    report = None
     if validate:
-        _validate(encoder)
+        report = _validate(encoder, pieces=pieces)
     else:
         _require_cuda(encoder)
 
@@ -126,16 +125,19 @@ def _pack_modernbert(
     params = ModernBertParams.from_hf_config(encoder.config)
     state = PatchState(
         params=params, original_forward=encoder.forward,
-        attention_backend=attention_backend,
+        attention_backend=attention_backend, validation_report=report,
+        pieces=pieces, execution=execution,
     )
-    if cuda_graph:
-        _enable_graphs(encoder, state, cuda_graph, cuda_graph_seq_cutoff)
-    if train_cuda_graph:
-        _enable_train_graphs(encoder, state, train_cuda_graph, cuda_graph_seq_cutoff)
+    try:
+        if cuda_graph:
+            _enable_graphs(encoder, state, cuda_graph, cuda_graph_seq_cutoff)
+        if train_cuda_graph:
+            _enable_train_graphs(encoder, state, train_cuda_graph, cuda_graph_seq_cutoff)
+    except BaseException:
+        state.graph_runner = state.packed_graph_runner = state.train_graph_runner = None
+        raise
 
-    setattr(encoder, ATTR, state)
-    encoder.forward = _make_forward(encoder, state)
-    return target
+    return state
 
 
 def _default_backend() -> str:
@@ -197,11 +199,11 @@ def _enable_graphs(
     )
     graph_backend = rectangular_graph_backend(state.attention_backend)
     state.graph_runner = (
-        build_runner(encoder, state.params, config, backend=graph_backend)
+        build_runner(encoder, state.params, config, backend=graph_backend, execution=state.execution)
         if graph_backend is not None else None
     )
     state.packed_graph_runner = build_packed_runner(
-        encoder, state.params, config, backend=state.attention_backend
+        encoder, state.params, config, backend=state.attention_backend, execution=state.execution
     )
     state.graph_enabled = True
 
@@ -224,7 +226,7 @@ def _enable_train_graphs(
         # training graph until a separate forward+backward crossover is calibrated.
         train_backend = "sdpa"
     state.train_graph_runner = build_train_runner(
-        encoder, state.params, config, backend=train_backend
+        encoder, state.params, config, backend=train_backend, execution=state.execution
     )
     state.train_graph_enabled = True
 
@@ -299,7 +301,7 @@ def _make_forward(encoder: nn.Module, state: PatchState):
         else:
             hidden = fused_forward(
                 encoder, state.params, input_ids, attention_mask,
-                backend=state.attention_backend,
+                backend=state.attention_backend, execution=state.execution,
             )
 
         if not return_dict:

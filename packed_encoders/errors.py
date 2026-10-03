@@ -13,7 +13,7 @@ class PackedEncodersError(Exception):
 
 
 class UnsupportedTargetError(PackedEncodersError):
-    """`pack()` could not locate a ModernBERT encoder inside the target."""
+    """`pack()` could not locate a supported encoder inside the target."""
 
 
 class ValidationError(PackedEncodersError):
