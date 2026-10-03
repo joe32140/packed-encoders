@@ -1,100 +1,103 @@
-# Torch 2.11 review for PR #5
+# Torch installation review for PR #5
 
 ## Decision
 
-Keep the existing Torch/Triton pins for this review. A straight 2.8 → 2.11 bump is
-**not a drop-in upgrade of the current installation contract**: it loses the
-configured prebuilt FlashAttention-2 wheel. Qwen's adaptation is tested in an
-isolated 2.11 environment; that does not establish a replacement for every current
-ModernBERT backend. No remote GPU benchmarks were run.
+Require Torch 2.11 / Triton 3.6 for all engines and supported Python versions
+(3.10–3.14), with CUDA 12.8 selected by the repository lockfile. Users retaining
+Torch 2.8 should pin `packed-encoders==0.1.0`. This release does not maintain a
+legacy Torch installation or CI matrix.
 
-## What carries over
+The initial review held back the upgrade because the configured FA2 wheel was
+built only for CPython 3.11 / Torch 2.8. The official FlashAttention GitHub assets
+inspected did not provide a 2.11 replacement. **Astral's GPU wheel index does**:
+`flash-attn==2.8.3.post1+cu.12.8.torch.2.11`, with metadata requiring
+`torch==2.11.*`, covers Linux x86-64/aarch64 and CPython 3.10–3.14. Replacing the
+hard-coded URL with that explicit, FA2-only index removes the installation blocker.
+These are Astral-provided builds, not the previously configured upstream wheel.
 
-- Python 3.10–3.14 remains supported by Torch 2.11. The existing Python 3.14-specific
-  Torch 2.9 branch could be removed if the package later standardizes on 2.11.
-- CUDA 12.8 builds remain available from the existing PyTorch index. Keep that
-  explicit index: PyPI's Torch 2.11 default is CUDA 13.0, which changes the runtime
-  and minimum driver requirements independently of the engine refactor.
-- Torch 2.11.0+cu128 resolves Triton 3.6.0. The package's current Triton 3.4/3.5
-  constraints must change together with Torch; changing only Torch is unsatisfiable.
-- On the RTX 5090, the tested CuteDSL 4.5.2 kernels, Triton kernels, SDPA paths,
-  autograd and training-graph tests run under Torch 2.11. This is correctness
-  evidence, not a performance comparison or a claim about untested GPUs.
-- The real topk-embed-v1-xsmall checkpoint passes eager/graphed encode parity,
-  validation and unpack restoration with Torch 2.11, Transformers 5.9 and FLA 0.5.1.
+A fresh, normally resolved installation from the lockfile passes the complete
+local RTX 5090 suite with both FA2 and Qwen, including the real topk checkpoint.
+No source compilation or `--no-deps` workaround is required. This establishes
+local correctness, not performance parity on the contributor's GPUs.
 
-## What does not carry over automatically
+## Dependency contract
 
-The `fa2` source in `pyproject.toml` is a CPython 3.11, Torch 2.8, CUDA 12 wheel.
-It cannot be retained as the supported binary for Torch 2.11. The official GitHub
-release assets inspected for this review contain no Torch 2.11 wheel. Installing
-`flash-attn==2.8.3.post1` in the isolated 2.11 environment attempts a source build;
-it fails here because `nvcc`/`CUDA_HOME` are absent. This proves the prebuilt path
-is missing, not that FA2 cannot be built against 2.11.
+- Base requirements are Torch `>=2.11,<2.12` and Triton `>=3.6,<3.7` on all
+  supported Python versions. The direct Triton requirement also covers CPU-only
+  Torch environments. `uv.lock` records the validated 2.11 stack.
+- Keep the explicit CUDA 12.8 PyTorch index. Moving to PyPI's default CUDA build
+  would independently change runtime and driver requirements.
+- The FA2 requirement remains `2.8.3.post1`; Astral's wheel metadata selects the
+  appropriate Torch ABI. Do not reuse the old Torch 2.8 binary with Torch 2.11.
+- `qwen3_5` includes Torch 2.11, Transformers 5.9, FLA, SentenceTransformers 6.x
+  and matching torchvision, covering the topk checkpoint's remote wrapper.
+  Transformers is bounded below 5.10 because the adapters use internal APIs.
+- PyLate currently pins SentenceTransformers 5.3 and cannot share the topk 6.x
+  environment. The explicit extras conflict makes this clear to uv; it is not a
+  Torch or FA2 incompatibility. Use separate environments for these two wrappers.
+- The lockfile includes the optional FA4 profile. Its actual GPU paths still need
+  validation on supported hardware; installation resolution is not GPU validation.
 
-The existing suite without FA2 has 12 failures and 11 skips (115 passes before the
-new registry tests). Eleven failures are explicit FlashAttention imports; the
-remaining failure asserts that every ModernBERT piece was probed, including its
-unavailable BSHD backend. Skipped Flash tests must not be counted as upgrade parity.
-With the existing Torch 2.8/FA2 environment and the refactored source, the complete
-suite passes (Qwen is skipped there because FLA is absent).
+## Reproduction
 
-Before promoting 2.11 as the default:
+From the repository root:
 
-1. Build/provide and test a compatible FA2 binary, or explicitly choose and validate
-   a replacement backend. Do not silently replace Flash with SDPA and call it parity.
-2. Update Torch and Triton together, remove/replace the hard-coded 2.8 FA2 source,
-   regenerate `uv.lock`, and update the CPU CI matrix and installation documentation.
-3. Recheck optional FA4 on its actual supported GPUs and repeat performance tests;
-   those are deliberately outside this session. Existing benchmark claims describe
-   their original environments, not a freshly validated 2.11 installation matrix.
+```bash
+uv sync --locked --no-dev --group test --extra fa2 --extra qwen3_5
+PE_TEST_TOPK=1 uv run --no-sync pytest tests -q --disable-warnings
+```
 
-The current `qwen3_5` extra only adds FLA; it does not override the base Torch pin.
-It is therefore insufficient to reproduce the checkpoint environment by itself.
-For this review we installed dependencies explicitly in a separate environment
-and imported the working tree directly, without changing the project's lockfile
-or the user's existing environment. A future packaging decision must address this
-rather than advertise `pip install packed-encoders[qwen3_5]` as the complete topk setup.
+For CPU tests, resolve against published package metadata and the CPU index.
+`--no-sources` prevents the checkout's CUDA source settings overriding that index:
 
-## Reproduction environment
+```bash
+uv venv /tmp/pe-cpu
+uv pip install --python /tmp/pe-cpu/bin/python --no-sources --torch-backend cpu \
+  -e '.[qwen3_5]' 'torch==2.11.*' pytest
+uv pip check --python /tmp/pe-cpu/bin/python
+/tmp/pe-cpu/bin/python -c 'import torch; assert torch.version.cuda is None'
+/tmp/pe-cpu/bin/python -m pytest tests -q --disable-warnings
+```
 
-GPU: local RTX 5090 (sm_120), driver 615.71.09.
+Use `--torch-backend cu128` for CUDA. Installing FA2 outside `uv sync` also
+requires `--index https://wheels.astral.sh/simple/cu128/`; see the README.
 
-- Qwen: Python 3.12.12, torch 2.11.0+cu128, triton 3.6.0,
-  transformers 5.9.0, flash-linear-attention/fla-core 0.5.1,
-  nvidia-cutlass-dsl 4.5.2, sentence-transformers 6.1.0,
-  torchvision 0.26.0+cu128.
-- Existing backend check: Python 3.11.14, torch 2.8.0+cu128,
-  transformers 5.3.0, the existing compatible compiled FA2 environment.
-- CPU: actual Torch CPU wheels, not just GPU tests hidden with an environment flag.
+## Validation
 
-The opt-in checkpoint test is run with `PE_TEST_TOPK=1`; a broken checkpoint oracle
-now fails that explicitly requested test instead of being converted into a skip.
-The multi-GPU test still requires two devices. Final results are recorded below.
+Local GPU: RTX 5090 (sm_120), driver 615.71.09. Fresh locked environment:
+Python 3.12.12, Torch 2.11.0+cu128, Triton 3.6.0, FA2
+2.8.3.post1+cu.12.8.torch.2.11, Transformers 5.9.0, FLA/fla-core 0.5.2,
+CuteDSL 4.5.2, SentenceTransformers 6.1.0, torchvision 0.26.0+cu128.
+
+| Run | Result |
+| --- | --- |
+| Fresh locked FA2 + Qwen environment, full suite, `PE_TEST_TOPK=1` | 168 passed, 1 skipped (requires two GPUs) |
+| Fresh complete Qwen CPU install, Python 3.12 / Torch 2.11.0+cpu | 64 passed, 105 skipped (CUDA) |
+| Repaired project environment, locked Torch 2.11 / FA2 / PyLate, full GPU suite | 143 passed, 1 skipped (optional FLA absent) |
+| Earlier Torch 2.8.0+cu128 / Triton 3.4.0 / upstream FA2 check, full suite | 143 passed, 1 skipped (optional FLA absent) |
+
+The combined GPU run covers ModernBERT inference, autograd/training graphs, the
+Qwen engine and real topk eager/graphed encode parity. Logs are retained locally
+at `/tmp/pe-install-locked-full.log`, `/tmp/pe-install-project-tests.log` and
+`/tmp/pe-pr5-modern-28.log`. The repaired project `.venv` retains the PyLate profile;
+the combined Qwen profile was tested in `/tmp/pe-install-combined`.
+All tested installations pass `uv pip check`.
+
+CI resolves CPU installations for Torch 2.11 on Python 3.10–3.14, plus the
+complete Qwen extra on Python 3.12. It checks dependency consistency and asserts that Torch is CPU-only.
+A separate job checks the committed lockfile, builds the wheel and resolves the
+FA2/Qwen, FA2/PyLate and FA4/Qwen profiles.
+
+Performance reproduction on the reported GPUs remains deferred. Existing
+benchmark numbers and dispatch calibration describe their original environments;
+they have not been re-established for the new lockfile. FA4 GPU validation and
+multi-GPU Qwen testing also remain outstanding.
 
 ## Sources
 
+- [Astral GPU wheel index](https://wheels.astral.sh/)
+- [uv: GPU-enabled PyTorch extensions](https://docs.astral.sh/uv/guides/integration/pytorch/)
 - [PyTorch 2.11 release announcement](https://pytorch.org/blog/pytorch-2-11-release-blog/)
 - [PyTorch release compatibility matrix](https://github.com/pytorch/pytorch/blob/main/RELEASE.md)
 - [Official FlashAttention releases](https://github.com/Dao-AILab/flash-attention/releases)
 - [Topk model and requirements](https://huggingface.co/topk-io/topk-embed-v1-xsmall/tree/main)
-
-| Run | Result |
-| --- | --- |
-| Full suite, Torch 2.8.0+cu128 / Triton 3.4.0 / FA2 2.8.3.post1, RTX 5090 | 143 passed, 1 skipped (optional FLA/Qwen module absent) |
-| Qwen suite, Torch 2.11.0+cu128, RTX 5090, `PE_TEST_TOPK=1` | 25 passed, 1 skipped (requires two GPUs) |
-| Full suite, Python 3.10.19 / Torch 2.11.0+cpu | 64 passed, 80 skipped (CUDA/optional FLA) |
-| Full suite, Python 3.14.7 / Torch 2.11.0+cpu | 64 passed, 80 skipped (CUDA/optional FLA) |
-
-Commands (from the repository root, using the corresponding environment):
-
-```bash
-python -m pytest tests -q --disable-warnings
-PE_TEST_TOPK=1 python -m pytest tests/test_qwen35.py -q --disable-warnings
-```
-
-Logs from this session: `/tmp/pe-pr5-modern-28.log`,
-`/tmp/pe-pr5-qwen-final.log`, `/tmp/pe-pr5-cpu310.log`,
-`/tmp/pe-pr5-cpu314.log`, and the incomplete-backend upgrade run
-`/tmp/pe-pr5-modern-211.log`. The installation failure is preserved at
-`/tmp/pe-pr5-fa2-install.log`.

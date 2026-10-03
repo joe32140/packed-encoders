@@ -218,5 +218,7 @@ replacement, device/dtype moves and `load_state_dict(assign=True)` require repac
 The engine pins launches/capture to the weights' device. Runners and FLA's temporary
 global tensor-cache setting do not support concurrent calls on the same process.
 
-See [the Torch 2.11 review](torch-2.11-review.md) before changing the installation
-pins. The topk checkpoint's environment differs from the package's current default.
+Install the complete topk environment with
+`uv sync --locked --no-dev --extra qwen3_5 --extra fa2`. The lockfile uses
+Torch 2.11 / CUDA 12.8 for both engines. See [the installation review](torch-2.11-review.md)
+for installation details and the separate PyLate environment requirement.
