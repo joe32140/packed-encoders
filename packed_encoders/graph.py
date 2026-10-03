@@ -28,7 +28,7 @@ from dataclasses import dataclass
 import torch
 from torch import Tensor, nn
 
-from packed_encoders import forward, ops
+from packed_encoders import forward
 from packed_encoders.config import ModernBertParams
 from packed_encoders.locate import find_encoder
 from packed_encoders.state import get_state
@@ -118,11 +118,13 @@ class _GraphRunner:
         params: ModernBertParams,
         config: GraphConfig,
         backend: str = "sdpa",
+        *, execution=None,
     ):
         self._model = model
         self._params = params
         self._config = config
         self._backend = backend
+        self._execution = forward._execution_for(model, execution)
         self._cache: "OrderedDict[tuple[int, int], _Captured]" = OrderedDict()
         self._device = next(model.parameters()).device
 
@@ -153,7 +155,7 @@ class _GraphRunner:
 
     def _eager(self, input_ids: Tensor, attention_mask: Tensor | None) -> Tensor:
         return forward.fused_forward(
-            self._model, self._params, input_ids, attention_mask, backend=self._backend
+            self._model, self._params, input_ids, attention_mask, backend=self._backend, execution=self._execution
         )
 
     def _insert(self, key: tuple[int, int], captured: "_Captured") -> None:
@@ -184,13 +186,13 @@ class _GraphRunner:
         """The captured region: the whole fused forward, run capture-safe."""
         p = forward.prologue(
             self._model, self._params, static.input_ids, static.attention_mask,
-            dense_mask=True, capture_safe=True,
+            dense_mask=True, capture_safe=True, execution=self._execution,
         )
         return forward.core(
             self._model, self._params,
             p.x, p.cos_global, p.sin_global, p.cos_local, p.sin_local,
             p.full_mask, p.sliding_mask,
-            backend=self._backend,
+            backend=self._backend, execution=self._execution,
         )
 
     def precapture(self, batch: int, seq_buckets) -> None:
@@ -254,11 +256,13 @@ class _PackedGraphRunner:
         params: ModernBertParams,
         config: GraphConfig,
         backend: str = "auto",
+        *, execution=None,
     ):
         self._model = model
         self._params = params
         self._config = config
         self._backend = backend
+        self._execution = forward._execution_for(model, execution)
         self._device = next(model.parameters()).device
         self._cache: OrderedDict[tuple[int, int, int, str], _PackedCaptured] = (
             OrderedDict()
@@ -318,7 +322,7 @@ class _PackedGraphRunner:
             cu_seqlens,
             max_seqlen,
             position_ids,
-            backend=self._backend,
+            backend=self._backend, execution=self._execution,
             _allow_graph=False,
         )
 
@@ -366,17 +370,17 @@ class _PackedGraphRunner:
     ) -> Tensor:
         model, params = self._model, self._params
         emb = model.embeddings.tok_embeddings(static.input_ids)
-        x = ops.fused_layer_norm(emb, model.embeddings.norm.weight,
+        x = self._execution.layer_norm(emb, model.embeddings.norm.weight,
                                  model.embeddings.norm.eps)
         dtype, device = x.dtype, x.device
         hd = params.head_dim
-        cos_g, sin_g = forward._rope_tables(
+        cos_g, sin_g = self._execution.rope_tables(
             static.max_seqlen, hd, params.global_rope_theta, device, dtype
         )
         if params.local_rope_theta == params.global_rope_theta:
             cos_l, sin_l = cos_g, sin_g
         else:
-            cos_l, sin_l = forward._rope_tables(
+            cos_l, sin_l = self._execution.rope_tables(
                 static.max_seqlen, hd, params.local_rope_theta, device, dtype
             )
 
@@ -389,7 +393,7 @@ class _PackedGraphRunner:
             gather(cos_g), gather(sin_g),
             gather(cos_l), gather(sin_l),
             None, None,
-            backend=resolved_backend,
+            backend=resolved_backend, execution=self._execution,
             cu_seqlens=static.cu_seqlens,
             max_seqlen=static.max_seqlen,
         )
@@ -401,10 +405,11 @@ def build_packed_runner(
     params: ModernBertParams,
     config: GraphConfig,
     backend: str = "auto",
+    *, execution=None,
 ) -> _PackedGraphRunner | None:
     if backend == "sdpa" or config.max_batch is None or config.max_seq is None:
         return None
-    return _PackedGraphRunner(model, params, config, backend=backend)
+    return _PackedGraphRunner(model, params, config, backend=backend, execution=execution)
 
 
 def rectangular_graph_backend(backend: str) -> str | None:
@@ -422,8 +427,9 @@ def build_runner(
     params: ModernBertParams,
     config: GraphConfig,
     backend: str = "sdpa",
+    *, execution=None,
 ) -> _GraphRunner:
-    runner = _GraphRunner(model, params, config, backend=backend)
+    runner = _GraphRunner(model, params, config, backend=backend, execution=execution)
     if config.seq_buckets:
         if config.max_batch is None:
             warnings.warn(
@@ -443,6 +449,12 @@ def build_runner(
 
 
 def set_cuda_graph(model: object, enabled: bool, *, config: GraphConfig | None = None) -> None:
+    from packed_encoders.dispatch import set_cuda_graph as dispatch
+
+    dispatch(model, enabled, config=config)
+
+
+def _set_modernbert_cuda_graph(model: object, enabled: bool, *, config: GraphConfig | None = None) -> None:
     """Turn the graph layer on or off after `pack()`. Building a runner the
     first time it is enabled requires CUDA and is lazy per shape."""
     state = get_state(model)
@@ -452,10 +464,10 @@ def set_cuda_graph(model: object, enabled: bool, *, config: GraphConfig | None =
         backend = rectangular_graph_backend(state.attention_backend)
         if backend is not None:
             state.graph_runner = build_runner(
-                encoder, state.params, graph_config, backend=backend,
+                encoder, state.params, graph_config, backend=backend, execution=state.execution,
             )
         state.packed_graph_runner = build_packed_runner(
-            encoder, state.params, graph_config, backend=state.attention_backend,
+            encoder, state.params, graph_config, backend=state.attention_backend, execution=state.execution,
         )
     state.graph_enabled = enabled
 

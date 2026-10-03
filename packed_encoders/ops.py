@@ -495,6 +495,12 @@ def flash_attention_qkv_bshd(
     `[.., S, hidden]`. No-grad only (see `use_bshd_rope_flash` — training is a wash)."""
     q, k = _rope_bshd_kernel(qkv, h, d, cos, sin)            # contiguous [.., S, H, D]
     v = qkv.view(*qkv.shape[:-1], 3, h, d)[..., 2, :, :]     # [.., S, H, D] (D contiguous)
+    return attention_bshd(q, k, v, window=window, scaling=scaling,
+                          cu_seqlens=cu_seqlens, max_seqlen=max_seqlen, backend=backend)
+
+
+def attention_bshd(q, k, v, *, window, scaling, cu_seqlens=None, max_seqlen=None, backend="flash"):
+    """Native BSHD attention, independently composable with a RoPE/layout piece."""
     if backend == "triton" and cu_seqlens is not None:
         qf, kf, vf = q.squeeze(0), k.squeeze(0), v.squeeze(0)
         packed_short_attention, packed_short_attention_supported = (

@@ -1,79 +1,113 @@
-"""The public entry points, dispatched through the architecture registry.
-
-This module (and everything it imports at load time) stays free of any one architecture's
-kernel toolchain: ModernBERT's CuteDSL kernels load when a ModernBERT model is packed. So
-`import packed_encoders` also works in an environment built for another architecture, whose
-torch pin CuteDSL's dependencies may not fit.
-"""
+"""Public lifecycle API, dispatched once at preparation time."""
 
 from __future__ import annotations
 
 from typing import Any
 
-from packed_encoders.locate import find_backbone
-from packed_encoders.state import get_state
+from packed_encoders.engine import OMITTED, Installation
+from packed_encoders.errors import PackedEncodersError
+from packed_encoders.locate import select_engine
+from packed_encoders.state import ATTR, INSTALL_ATTR, find_installation, get_installation
 
 
 def pack(
     target: object,
     *,
-    cuda_graph: Any = None,
-    train_cuda_graph: Any = False,
-    cuda_graph_seq_cutoff: int = 64,
-    attention_backend: str | None = None,
+    engine=None,
+    cuda_graph: Any = OMITTED,
+    train_cuda_graph: Any = OMITTED,
+    cuda_graph_seq_cutoff: Any = OMITTED,
+    attention_backend: Any = OMITTED,
     validate: bool = True,
 ) -> object:
-    """Install the architecture's fast forward onto the backbone inside `target`, in place,
-    and return `target`. See `packed_encoders.pack._pack_modernbert` for the ModernBERT
-    options. `cuda_graph=None` means the architecture's default (off for ModernBERT)."""
-    arch, encoder = find_backbone(target)
-    arch.pack(
-        target, encoder, cuda_graph=cuda_graph, train_cuda_graph=train_cuda_graph,
-        cuda_graph_seq_cutoff=cuda_graph_seq_cutoff, attention_backend=attention_backend,
-        validate=validate,
-    )
+    """Prepare and install an engine in place; return the original target.
+
+    Omitted options use the engine's defaults. An explicit engine bypasses the
+    registry. To switch engines, unpack first; patches are never layered.
+    """
+    options = {k: v for k, v in (
+        ("cuda_graph", cuda_graph), ("train_cuda_graph", train_cuda_graph),
+        ("cuda_graph_seq_cutoff", cuda_graph_seq_cutoff),
+        ("attention_backend", attention_backend),
+    ) if v is not OMITTED}
+    installed = find_installation(target)
+    if installed is not None:
+        if engine is not None and engine is not installed.engine:
+            raise PackedEncodersError("unpack the model before switching engines")
+        installed.packed.configure(options)
+        return target
+
+    selected, binding = select_engine(target, engine=engine)
+    module = binding.patch_target
+    if getattr(module, ATTR, None) is not None:
+        raise PackedEncodersError("the target already carries an unowned packed state; unpack it first")
+    original = module.forward
+    had_forward = "forward" in module.__dict__
+    # prepare must unwind its own partial work if it raises (see engine.py).
+    prepared = selected.prepare(binding, {**options, "validate": validate})
+    installed = Installation(selected, binding, prepared, original, had_forward)
+    try:
+        binding.adapter.install(binding, prepared)
+        setattr(module, INSTALL_ATTR, installed)
+    except BaseException:
+        installed.restore_forward()
+        module.__dict__.pop(INSTALL_ATTR, None)
+        module.__dict__.pop(ATTR, None)
+        prepared.close(rollback=True)
+        raise
     return target
 
 
 def unpack(target: object) -> object:
-    """Restore the original forward, reverting `pack()`."""
-    arch, encoder = find_backbone(target)
-    arch.unpack(encoder)
+    """Restore the recorded forward and release resources, retaining trained weights."""
+    installed = find_installation(target)
+    if installed is not None:
+        installed.packed.close()
+        installed.restore_forward()
+        module = installed.binding.patch_target
+        module.__dict__.pop(ATTR, None)
+        module.__dict__.pop(INSTALL_ATTR, None)
     return target
 
 
-def validate(target: object, **kwargs: Any):
-    """Run the target architecture's hard gate; return its report or raise ValidationError."""
-    arch, encoder = find_backbone(target)
-    return arch.validate(encoder, **kwargs)
+def get_engine(target: object):
+    """Return the installed packed engine (provisional extension API)."""
+    return get_installation(target).packed
+
+
+def validate(target: object, *, engine=None, **kwargs: Any):
+    """Return the engine-specific report (preserving ModernBERT's public type)."""
+    installed = find_installation(target)
+    if installed is not None:
+        if engine is not None and engine is not installed.engine:
+            raise PackedEncodersError("validation must use the installed engine; unpack before switching")
+        return installed.packed.validate(**kwargs).details
+    selected, binding = select_engine(target, engine=engine)
+    return selected.validate(binding, **kwargs).details
 
 
 def set_cuda_graph(model: object, enabled: bool, *, config: Any = None) -> None:
-    """Turn the inference graph layer on or off after `pack()`."""
-    state = get_state(model)
-    if hasattr(state, "set_cuda_graph"):          # non-ModernBERT architectures own their runner
-        state.set_cuda_graph(enabled, config)
-        return
-    from packed_encoders.graph import set_cuda_graph as _modernbert_set_cuda_graph
+    get_installation(model).packed.set_cuda_graph(enabled, config)
 
-    _modernbert_set_cuda_graph(model, enabled, config=config)
+
+def set_train_cuda_graph(model: object, enabled: bool, *, config: Any = None) -> None:
+    get_installation(model).packed.set_train_cuda_graph(enabled, config)
 
 
 class _NoCudaGraph:
     def __init__(self, model: object):
-        self._state = get_state(model)
-        self._previous = self._state.graph_enabled
+        self._engine = get_installation(model).packed
 
     def __enter__(self):
-        self._previous = self._state.graph_enabled
-        self._state.graph_enabled = False
+        self._previous = self._engine.graph_enabled
+        self._engine.graph_enabled = False
         return self
 
     def __exit__(self, *exc):
-        self._state.graph_enabled = self._previous
+        self._engine.graph_enabled = self._previous
         return False
 
 
 def no_cuda_graph(model: object) -> _NoCudaGraph:
-    """Context manager that bypasses captured graphs for a one-off odd shape."""
+    """Temporarily disable inference graphs, restoring the prior setting on exit."""
     return _NoCudaGraph(model)
