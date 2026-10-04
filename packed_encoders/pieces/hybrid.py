@@ -134,7 +134,6 @@ def check_gate(x, g):
 
 def default_numerical():
     from fla.modules.layernorm import rms_norm
-    from fla.modules.activations import swiglu
     from packed_encoders._kernels import hybrid as k
     from packed_encoders.pieces.numerical import LINEAR, reference_linear, check_linear
 
@@ -148,7 +147,7 @@ def default_numerical():
         linear=Piece("torch-linear", LINEAR, F.linear, reference_linear, check_linear),
         rms_norm=Piece("fla-rms-norm", RMS, norm, ref_rms, check_rms),
         add_rms_norm=Piece("fla-add-rms-norm", ADD_RMS, add_norm, ref_add_rms, check_add_rms),
-        swiglu=Piece("fla-swiglu", SWIGLU, swiglu, ref_swiglu, check_pair),
+        swiglu=Piece("triton-swiglu", SWIGLU, k.swiglu, ref_swiglu, check_pair),
         conv_split=Piece("triton-causal-conv-split", CONV, k.conv_split, ref_conv, check_conv),
         gated_rms_norm=Piece("triton-gated-rms-norm", GATED_RMS, k.gated_rms_norm, ref_gated_rms, check_gated_rms),
         qk_norm_rope=Piece("triton-rms-partial-rope", QK_ROPE, k.qk_norm_rope, ref_rope, check_rope),

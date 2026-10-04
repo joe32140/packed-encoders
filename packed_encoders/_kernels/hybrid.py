@@ -217,3 +217,36 @@ def sigmoid_gate(o: Tensor, gate: Tensor) -> Tensor:
         _sigmoid_gate_kernel[(triton.cdiv(R, BR),)](o, gate, y, gate.stride(0), gate.stride(1), R, H=H, D=D, BR=BR,
                                                      num_warps=4)
     return y
+
+
+# fla's swiglu autotunes its block size keyed on the width alone, and caches the winner on disk: the first
+# call's token count decides it for every later batch. Tuned on a few rows it ran 1.7x slower at 42k tokens
+# on H100. A fixed config measured within 1.12x of the best for each shape, 17-42k rows, on H100 and L40S.
+_SWIGLU_B, _SWIGLU_WARPS = 2048, 16
+
+
+@triton.jit
+def _swiglu_kernel(G, U, Y, stride_g, stride_u, T, D: tl.constexpr, B: tl.constexpr):
+    """silu(g) * u in fp32, rounded once, as fla's swiglu."""
+    offs = tl.program_id(0).to(tl.int64) * B + tl.arange(0, B)
+    m = offs < T
+    row, col = offs // D, offs % D
+    g = tl.load(G + row * stride_g + col, mask=m, other=0.).to(tl.float32)
+    u = tl.load(U + row * stride_u + col, mask=m, other=0.).to(tl.float32)
+    tl.store(Y + offs, (g * tl.sigmoid(g) * u).to(Y.dtype.element_ty), mask=m)
+
+
+def swiglu(g: Tensor, u: Tensor) -> Tensor:
+    """g, u: (..., D) with unit last stride (e.g. the two halves of one GEMM). Returns a contiguous (..., D)."""
+    D = g.shape[-1]
+    g2, u2 = g.reshape(-1, D), u.reshape(-1, D)
+    if g2.stride(-1) != 1:
+        g2 = g2.contiguous()
+    if u2.stride(-1) != 1:
+        u2 = u2.contiguous()
+    y = torch.empty(g.shape, device=g.device, dtype=g.dtype)
+    T = g2.numel()
+    if T:
+        _swiglu_kernel[(triton.cdiv(T, _SWIGLU_B),)](g2, u2, y, g2.stride(0), u2.stride(0), T, D=D, B=_SWIGLU_B,
+                                                     num_warps=_SWIGLU_WARPS)
+    return y
