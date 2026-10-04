@@ -1,12 +1,12 @@
 """Qwen3.5 (topk-embed-v1) under packed-encoders on Modal GPUs: GPU tests + benchmark, per GPU x stack.
 
-    modal run benchmarks/scripts/modal_qwen35.py --data sample.json --gpus L40S,A100-40GB,H100 \\
-        --models xsmall,small --stack pinned --out results/
+    PE_STACK=pinned modal run benchmarks/scripts/modal_qwen35.py --data sample.json --gpus L40S,A100-40GB,H100 \\
+        --models xsmall,small --out results/
 
 Stacks (the stack is one image; every requested GPU runs concurrently):
-  pinned  topk's own requirements.txt: torch 2.11, transformers 5.9.0 — attention via torch's varlen kernel
-  fa2     torch 2.8 + flash-attn 2.8.3 wheel + transformers 5.16.1 (the packed-encoders pin)
-  fa4     torch 2.8 + flash-attn-4 (CuteDSL; sm_90 / sm_100) + transformers 5.16.1
+  pinned  the `qwen3_5` extra: torch 2.11, transformers 5.9.0 — attention via torch's varlen kernel
+  fa2     pinned + the `fa2` extra (flash-attn 2.8.3.post1 built for torch 2.11, from Astral's index)
+  fa4     pinned + the `fa4` extra (flash-attn-4, CuteDSL; sm_90 / sm_100)
 The attention kernel is chosen by probe inside `pack()`, so each result records what actually ran.
 """
 
@@ -22,26 +22,27 @@ import modal
 # (hydrates `run`), where the file sits at /root and PE_STACK comes from the image env.
 REPO = Path(__file__).resolve().parents[2] if modal.is_local() else Path("/root/pe")
 STACK = os.environ.get("PE_STACK", "pinned")
-FA2_WHEEL = ("https://github.com/Dao-AILab/flash-attention/releases/download/v2.8.3/"
-             "flash_attn-2.8.3+cu12torch2.8cxx11abiTRUE-cp312-cp312-linux_x86_64.whl")
 MODELS = {"xsmall": "topk-io/topk-embed-v1-xsmall", "small": "topk-io/topk-embed-v1-small"}
 
-if STACK == "pinned":
-    image = (modal.Image.debian_slim(python_version="3.12")
-             .pip_install("torch==2.11.0", "torchvision==0.26.0", index_url="https://download.pytorch.org/whl/cu128")
-             .pip_install("transformers==5.9.0", "sentence-transformers==6.0.1", "flash-linear-attention==0.5.1",
-                          "kernels==0.14.1", "safetensors>=0.7.0", "Pillow>=12.0", "numpy", "pytest")
-             # No nvidia-cutlass-dsl here: 4.5.2 pulls cuda-bindings 13 and resolves torch 2.11+cu128 up to a
-             # CUDA 13 torch (torchvision::nms then fails to load). The Qwen3.5 path never imports CuteDSL.
-             .run_commands("python -c \"import torch; assert torch.__version__.startswith('2.11'), torch.__version__\""))
-else:
-    image = (modal.Image.debian_slim(python_version="3.12")
-             .pip_install("torch==2.8.0", "torchvision==0.23.0", index_url="https://download.pytorch.org/whl/cu128")
-             .pip_install("transformers==5.16.1", "sentence-transformers==6.0.1", "flash-linear-attention==0.5.1",
-                          "accelerate==1.14.0", "safetensors==0.8.0", "tokenizers==0.23.1", "einops==0.8.2",
-                          "pillow", "numpy", "pytest", "nvidia-cutlass-dsl==4.5.2"))
-    image = image.pip_install(FA2_WHEEL) if STACK == "fa2" else image.pip_install("flash-attn-4==4.0.0b16",
-                                                                                  "quack-kernels==0.5.0")
+TORCH_INDEX = "https://download.pytorch.org/whl/cu128"
+image = (modal.Image.debian_slim(python_version="3.12")
+         .pip_install("torch==2.11.0", "torchvision==0.26.0", index_url=TORCH_INDEX)
+         .pip_install("transformers==5.9.0", "sentence-transformers==6.1.0", "flash-linear-attention==0.5.1",
+                      "kernels==0.14.1", "safetensors>=0.7.0", "Pillow>=12.0", "numpy", "pytest"))
+# No nvidia-cutlass-dsl in pinned/fa2: unpinned, it pulls cuda-bindings 13 and resolves torch 2.11+cu128 up to a
+# CUDA 13 torch (torchvision::nms then fails to load). The Qwen3.5 path never imports CuteDSL.
+if STACK == "fa2":
+    # Astral's index holds only flash-attn; its one other dependency (einops) is already installed.
+    image = image.pip_install("flash-attn==2.8.3.post1", index_url="https://wheels.astral.sh/simple/cu128/",
+                              extra_options="--no-deps")
+elif STACK == "fa4":
+    # The CUDA 12 bindings and torch are pinned as uv.lock has them, so nothing moves torch to CUDA 13.
+    image = image.pip_install("flash-attn-4==4.0.0b16", "quack-kernels==0.5.0", "nvidia-cutlass-dsl==4.5.2",
+                              "cuda-python==12.9.7", "cuda-bindings==12.9.7", "torch==2.11.0",
+                              extra_index_url=TORCH_INDEX)
+elif STACK != "pinned":
+    raise SystemExit(f"unknown PE_STACK {STACK!r}: pinned, fa2 or fa4")
+image = image.run_commands("python -c \"import torch; assert torch.__version__.startswith('2.11'), torch.__version__\"")
 image = (image.env({"HF_HOME": "/cache/hf", "TOKENIZERS_PARALLELISM": "false", "PYTHONPATH": "/root/pe", "PE_STACK": STACK,
                     "TRITON_CACHE_DIR": f"/cache/triton-pe-{STACK}", "PYTHONUNBUFFERED": "1"})
          .add_local_dir(str(REPO / "packed_encoders"), "/root/pe/packed_encoders", ignore=["__pycache__"])

@@ -53,8 +53,8 @@ def main() -> None:
     ap.add_argument("--n-docs", type=int, default=512)
     ap.add_argument("--levels", default="forward,encode")
     ap.add_argument("--no-validate", action="store_true",
-                    help="pack without the hard gate (for stacks where the model's own forward cannot run, e.g. "
-                         "topk on torch 2.8); parity vs stock is still reported where stock ran")
+                    help="pack without the hard gate (for stacks where the model's own forward cannot run); "
+                         "parity vs stock is still reported where stock ran")
     ap.add_argument("--fusion-ab", action="store_true",
                     help="after the graphs variant, run (fusions, small GEMMs) off/off, on/off, on/on with graphs "
                          "recaptured, so the A/B shares one process, host and GPU")

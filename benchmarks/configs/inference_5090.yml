@@ -22,7 +22,7 @@ query_endpoint:
   batch_size: 8
   cuda_graph: true
   cuda_graph_pad_to: 32
-  parity_floor: 0.98
+  parity_floor: 0.997
   warmup: 1
   trials: 5
   trial_repeats: 10

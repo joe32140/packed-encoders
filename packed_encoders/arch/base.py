@@ -1,58 +1,50 @@
-"""The architecture plugin contract and its registry.
+"""Preparation-time engines with explicit curated defaults and ambiguity errors."""
 
-packed-encoders speeds a model up by replacing one module's `forward`, in place, with an
-engine that computes the same function faster. *Which* module and *how* are
-architecture-specific; graphs, staging, and attention-kernel selection are shared
-(`packed_encoders.runtime`). An `Architecture` is the seam between the two:
+from packed_encoders.engine import Engine
+from packed_encoders.errors import PackedEncodersError
 
-    match(module)             is this live module one I patch?
-    validate(module, ...)     hard gate: return a report or raise ValidationError
-    pack(module, **options)   install the fast forward in place
-    unpack(module)            restore the original forward
-
-`find_backbone()` walks wrapper objects (SentenceTransformer, PyLate, HF task heads) and
-asks every registered architecture at every node, so a new family is one module plus one
-`register()` call — `pack()`, `unpack()`, and `validate()` dispatch through here.
-"""
-
-from __future__ import annotations
-
-from typing import Any, Protocol, runtime_checkable
-
-from torch import nn
+# Compatibility import; the old match/pack plugin contract is superseded.
+Architecture = Engine
+_REGISTRY: list[Engine] = []
+_DEFAULTS: set[str] = set()
 
 
-@runtime_checkable
-class Architecture(Protocol):
-    name: str
-
-    def match(self, module: nn.Module) -> bool: ...
-
-    def validate(self, module: nn.Module, **kwargs: Any) -> Any: ...
-
-    def pack(self, target: object, module: nn.Module, **options: Any) -> Any: ...
-
-    def unpack(self, module: nn.Module) -> None: ...
+def register(engine: Engine, *, default: bool = False) -> Engine:
+    if any(e.name == engine.name for e in _REGISTRY):
+        raise ValueError(f"engine {engine.name!r} is already registered")
+    _REGISTRY.append(engine)
+    if default:
+        _DEFAULTS.add(engine.name)
+    return engine
 
 
-_REGISTRY: list[Architecture] = []
-
-
-def register(arch: Architecture) -> Architecture:
-    if any(a.name == arch.name for a in _REGISTRY):
-        raise ValueError(f"architecture {arch.name!r} is already registered")
-    _REGISTRY.append(arch)
-    return arch
-
-
-def registered() -> tuple[Architecture, ...]:
+def registered() -> tuple[Engine, ...]:
     return tuple(_REGISTRY)
 
 
-def match(module: object) -> Architecture | None:
-    if not isinstance(module, nn.Module):
-        return None
-    for arch in _REGISTRY:
-        if arch.match(module):
-            return arch
-    return None
+def select(module: object, *, engine=None):
+    candidates = []
+    engines = (engine,) if engine is not None else registered()
+    for candidate in engines:
+        # Adapter precedence is authored within an engine (e.g. topk before HF).
+        for adapter in candidate.adapters:
+            binding = adapter.bind(module)
+            if binding is not None:
+                candidates.append((candidate, binding))
+                break
+    if engine is None:
+        defaults = [c for c in candidates if c[0].name in _DEFAULTS]
+        if defaults:
+            candidates = defaults
+    if len(candidates) > 1:
+        names = ", ".join(p.name for p, _ in candidates)
+        raise PackedEncodersError(
+            f"ambiguous engines for {type(module).__name__}: {names}; "
+            "pass engine=... to pack() explicitly"
+        )
+    return candidates[0] if candidates else None
+
+
+def match(module: object):
+    selected = select(module)
+    return selected[0] if selected else None

@@ -373,11 +373,7 @@ def test_topk_pack_encode_unpack():
         q = model.encode(queries, task="query", batch_size=8, convert_to_numpy=False)
         return [x.float() for x in d + q]
 
-    try:
-        stock = enc()
-    except Exception as exc:  # noqa: BLE001 — topk's own compiled flex_attention, before any packing
-        pytest.skip(f"topk's shipped forward fails on torch {torch.__version__} (it pins 2.11), so there is no "
-                    f"reference here: {type(exc).__name__}")
+    stock = enc()  # An explicitly requested end-to-end check must fail if its oracle fails.
     params_before = {n: p.detach().clone() for n, p in net.named_parameters() if "language_model" in n}
     pe.pack(model)
     state = getattr(net, ATTR)
@@ -403,3 +399,287 @@ def test_topk_pack_encode_unpack():
     restored = enc()
     for a, b in zip(restored, stock):
         assert torch.allclose(a, b, atol=1e-3)
+
+
+@pytest.fixture
+def topk_tiny(tiny):
+    """The topk entry contract with a local random backbone; no download."""
+    from types import SimpleNamespace
+
+    class Topk(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.config = SimpleNamespace(model_type="topk_embed", output_dim=32, dim=64, normalize=True)
+            self.model = torch.nn.Module()
+            self.model.language_model = copy.deepcopy(tiny)
+            self.model.language_model.document_causal = True
+            self.head = torch.nn.Linear(256, 64, bias=False, device="cuda", dtype=torch.bfloat16)
+
+        def forward(self, input_ids, attention_mask, packed_ids, position_ids, cu_seqlens, seq_idx,
+                    pixel_values=None, image_scatter_index=None, vision_inputs=None, return_dict=True):
+            lengths = cu_seqlens.diff().tolist()
+            hidden = torch.cat([self.model.language_model(input_ids=ids[None]).last_hidden_state[0]
+                                for ids in packed_ids.flatten().split(lengths)])
+            vectors = F.normalize(self.head(hidden).float()[:, :32], dim=-1)
+            out = vectors.new_zeros((*input_ids.shape, 32))
+            out[attention_mask.bool()] = vectors
+            return out
+
+    model = Topk().eval()
+    yield model
+    import packed_encoders as pe
+    pe.unpack(model)
+
+
+def test_qwen_prepared_boundary_pieces_controls_and_teardown(topk_tiny):
+    from collections import Counter
+    from dataclasses import replace
+    import packed_encoders as pe
+    from packed_encoders.arch.qwen3_5 import Qwen35Hybrid
+    from packed_encoders.arch.qwen3_5.pieces import default_pieces
+    from packed_encoders.errors import PackedEncodersError
+    from packed_encoders.runtime.graphs import PaddedGraphConfig
+
+    model = topk_tiny
+    calls = Counter()
+    pieces = default_pieces()
+    def counted(name, fn):
+        def call(*args, **kwargs):
+            calls[name] += 1
+            return fn(*args, **kwargs)
+        return call
+    selected = replace(pieces, **{name: replace(getattr(pieces, name), execute=counted(name, getattr(pieces, name).execute))
+                                 for name in pieces.__dataclass_fields__})
+    owner = Qwen35Hybrid(pieces=selected)
+    original = model.forward
+    param = model.model.language_model.layers[0].mlp.gate_proj.weight
+    pe.pack(model, engine=owner, validate=False, cuda_graph=False, attention_backend="sdpa")
+    packed = pe.get_engine(model)
+    assert packed.binding.weight_source is model.model.language_model
+    assert packed.composition is selected and packed.pieces == selected.all()
+    assert packed.capabilities.original_forward_fallback and not packed.capabilities.training
+    batch = pe.PackedBatch(torch.randint(0, 1024, (29,), device="cuda"), host_lengths=(7, 22))
+    with pytest.raises(PackedEncodersError, match="no_grad"):
+        packed.forward_packed(batch)
+    with torch.no_grad():
+        for malformed in (replace(batch, host_lengths=(0, 29)),
+                          replace(batch, position_ids=torch.arange(29, device="cuda")),
+                          replace(batch, input_ids=batch.input_ids.int())):
+            with pytest.raises(PackedEncodersError):
+                packed.forward_packed(malformed)
+        eager = packed.forward_packed(batch)
+        reference = torch.cat([_hf_hidden(model.model.language_model, ids) for ids in batch.input_ids.split([7, 22])])
+        assert eager.shape == (29, 256)  # hidden states, not projected vectors
+        assert F.cosine_similarity(eager.float(), reference, dim=-1).min() > 0.99
+        pe.set_cuda_graph(model, True, config=PaddedGraphConfig(row_buckets=(2,), max_seq=64, max_tokens=128))
+        graphed = packed.forward_packed(batch)
+        assert F.cosine_similarity(graphed.float(), eager.float(), dim=-1).min() > 0.99
+        before = calls.copy()
+        packed.forward_packed(batch)
+        assert calls == before  # replay bypasses the Python schedule
+        with pe.no_cuda_graph(model):
+            packed.forward_packed(batch)
+        assert calls["linear"] > before["linear"]
+        for slot in ("rms_norm", "add_rms_norm", "linear", "swiglu", "conv_split", "gated_rms_norm", "qk_norm_rope_pair", "sigmoid_gate", "gdn_chunk", "gdn_recurrent", "attention_packed", "attention_padded"):
+            assert calls[slot] > 0, slot
+        report = packed.validate(batches=((7, 70),), graphs=True)
+        assert report.engine == "qwen3_5" and report.details.eager_cos_mean > 0.999
+        assert len(report.details.pieces) == 13
+        param.add_(0.01)
+        updated = param.clone()
+    with pytest.raises(PackedEncodersError, match="unpack"):
+        pe.pack(model, attention_backend="flash")
+    with pytest.raises(PackedEncodersError, match="training graphs"):
+        pe.set_train_cuda_graph(model, True)
+    pe.pack(model, cuda_graph=False)
+    assert not packed.graph_enabled
+    pe.unpack(model)
+    assert model.forward == original and "forward" not in model.__dict__
+    torch.testing.assert_close(param, updated, rtol=0, atol=0)
+    assert packed.state.runner is None
+    with pytest.raises(PackedEncodersError, match="closed"):
+        packed.forward_packed(batch)
+
+
+@pytest.mark.parametrize("failure", ["piece", "install"])
+def test_qwen_failure_restores_storage_and_forward(topk_tiny, monkeypatch, failure):
+    from dataclasses import replace
+    import packed_encoders as pe
+    from packed_encoders.arch.qwen3_5 import Qwen35Hybrid, TopkEmbedAdapter
+    from packed_encoders.arch.qwen3_5.pieces import default_pieces
+    from packed_encoders.errors import ValidationError
+    from packed_encoders.state import ATTR, INSTALL_ATTR
+
+    model = topk_tiny
+    original = model.forward
+    params = [(p, p.data_ptr(), p.detach().clone()) for p in model.parameters()]
+    pieces = default_pieces()
+    if failure == "piece":
+        pieces = replace(pieces, swiglu=replace(pieces.swiglu, execute=lambda g, u: torch.zeros_like(g)))
+    else:
+        def fail_install(self, binding, packed):
+            setattr(binding.patch_target, ATTR, packed.state)
+            binding.patch_target.forward = lambda *a: None
+            raise RuntimeError("install failed")
+        monkeypatch.setattr(TopkEmbedAdapter, "install", fail_install)
+    with pytest.raises((ValidationError, RuntimeError)):
+        pe.pack(model, engine=Qwen35Hybrid(pieces=pieces), cuda_graph=False, validate=failure == "piece")
+    assert model.forward == original and "forward" not in model.__dict__
+    assert not hasattr(model, ATTR) and not hasattr(model, INSTALL_ATTR)
+    assert len({p.untyped_storage().data_ptr() for p, _, _ in params}) == len(params)
+    for param, _, value in params:
+        torch.testing.assert_close(param, value, rtol=0, atol=0)
+
+
+def test_qwen_rejects_aliased_parameters_before_mutation(topk_tiny):
+    import packed_encoders as pe
+    from packed_encoders.errors import UnsupportedTargetError
+    model = topk_tiny
+    mlp = model.model.language_model.layers[0].mlp
+    mlp.up_proj.weight = mlp.gate_proj.weight
+    ptr = mlp.gate_proj.weight.data_ptr()
+    with pytest.raises(UnsupportedTargetError, match="tied or aliased"):
+        pe.pack(model, validate=False)
+    assert mlp.up_proj.weight is mlp.gate_proj.weight
+    assert mlp.gate_proj.weight.data_ptr() == ptr
+
+
+def test_topk_adapter_delegates_grad_and_all_image_inputs(topk_tiny):
+    import packed_encoders as pe
+    model = topk_tiny
+    calls = []
+    sentinel = object()
+    def original(*args, **kwargs):
+        calls.append((args, kwargs))
+        return sentinel
+    model.forward = original
+    pe.pack(model, validate=False, cuda_graph=False)
+    args = (None,) * 6
+    with pytest.warns(UserWarning, match="original forward"):
+        assert model(*args) is sentinel  # grad enabled
+    with torch.no_grad():
+        for keyword in ("pixel_values", "image_scatter_index", "vision_inputs"):
+            marker = object()
+            assert model(*args, **{keyword: marker}) is sentinel
+            assert calls[-1][1][keyword] is marker
+    assert len(calls) == 4
+    pe.unpack(model)
+    assert model.forward is original
+
+
+# Adapted from e97d004: use #5's topk adapter and prepared packed entry instead
+# of the stock HF entry introduced separately in #7.
+@pytest.mark.parametrize("entry,failure", [
+    ("packed", "capture"), ("topk", "capture"),
+    ("packed", "eager"), ("topk", "eager"), ("topk", "projection"),
+])
+def test_out_of_memory_with_graphs_drops_them_and_continues_eager(topk_tiny, monkeypatch, entry, failure):
+    import weakref
+    import packed_encoders as pe
+    import packed_encoders.arch.qwen3_5 as qwen
+    from packed_encoders.runtime.graphs import PaddedGraphConfig
+
+    model = topk_tiny
+    g = torch.Generator().manual_seed(6)
+    ids = torch.randint(0, 1024, (3, 40), generator=g).cuda()
+    feats = dict(input_ids=ids, attention_mask=torch.ones_like(ids), packed_ids=ids.flatten(),
+                 position_ids=torch.arange(40, device=ids.device).repeat(3),
+                 cu_seqlens=torch.arange(4, device=ids.device, dtype=torch.int32) * 40,
+                 seq_idx=torch.arange(3, device=ids.device).repeat_interleave(40))
+    batch = pe.PackedBatch(ids.flatten(), host_lengths=(40, 40, 40))
+    with torch.no_grad():
+        stock = (model(**feats) if entry == "topk" else
+                 torch.cat([_hf_hidden(model.model.language_model, row) for row in ids]))
+    cfg = PaddedGraphConfig(row_buckets=(3,), max_seq=64, max_tokens=192)
+    pe.pack(model, cuda_graph=cfg, validate=False)
+    packed = pe.get_engine(model)
+    state = packed.state
+
+    def run():
+        return model(**feats) if entry == "topk" else packed.forward_packed(batch)
+
+    # Hold a real graph before injecting OOM; the failing capture uses a new bucket.
+    with torch.no_grad():
+        packed.forward_packed(pe.PackedBatch(ids[:, :8].flatten(), host_lengths=(8, 8, 8)))
+    assert state.runner.num_graphs == 1
+    runner_ref = weakref.ref(state.runner)
+    failed_tensor = []
+    calls = []
+
+    def oom(*a, **k):
+        calls.append(1)
+        temporary = torch.empty(16, device=ids.device)
+        failed_tensor.append(weakref.ref(temporary))
+        raise torch.OutOfMemoryError("CUDA out of memory. (simulated)")
+
+    if failure == "capture":
+        state.runner._capture = oom
+    else:
+        original = state.engine.forward_packed if failure == "eager" else qwen._vectors
+
+        def fail_once(*a, **k):
+            if not calls:
+                return oom(*a, **k)
+            # The traceback and graph runner must be gone before eager retry.
+            assert runner_ref() is None and failed_tensor[0]() is None
+            return original(*a, **k)
+
+        if failure == "eager":
+            # Disabled graphs still hold memory that the eager path may need.
+            pe.set_cuda_graph(model, False)
+            monkeypatch.setattr(state.engine, "forward_packed", fail_once)
+        else:
+            monkeypatch.setattr(qwen, "_vectors", fail_once)
+
+    with pytest.warns(UserWarning, match="dropped them"), torch.no_grad():
+        out = run()
+    assert len(calls) == 1
+    assert state.runner is None and not packed.graph_enabled
+    assert runner_ref() is None and failed_tensor[0]() is None
+    cos = F.cosine_similarity(out.float(), stock.float(), dim=-1)
+    assert cos.mean().item() > 0.999
+
+    with torch.no_grad():
+        again = run()
+    torch.testing.assert_close(again, out)
+    assert state.runner is None
+    with monkeypatch.context() as patch:
+        patch.setattr(state.engine, "forward_packed", oom)
+        with pytest.raises(torch.OutOfMemoryError), torch.no_grad():
+            run()                   # no graphs left: a real OOM propagates
+
+    pe.set_cuda_graph(model, True, config=cfg)
+    with torch.no_grad():
+        restored = run()
+    assert packed.graph_enabled and state.runner.num_graphs > 0
+    assert F.cosine_similarity(restored.float(), stock.float(), dim=-1).mean() > 0.999
+    pe.unpack(model)
+
+
+def test_graph_recovery_does_not_swallow_errors_or_repeat_eager_retry(topk_tiny, monkeypatch):
+    import packed_encoders as pe
+    from packed_encoders.runtime.graphs import PaddedGraphConfig
+
+    pe.pack(topk_tiny, validate=False, cuda_graph=PaddedGraphConfig(max_tokens=128))
+    packed = pe.get_engine(topk_tiny)
+    batch = pe.PackedBatch(torch.arange(8, device="cuda"), host_lengths=(8,))
+
+    def other_error(*a, **k):
+        raise RuntimeError("unrelated failure")
+
+    packed.state.runner._capture = other_error
+    with pytest.raises(RuntimeError, match="unrelated failure"), torch.no_grad():
+        packed.forward_packed(batch)
+    assert packed.graph_enabled and packed.state.runner is not None
+
+    calls = []
+    def oom(*a, **k):
+        calls.append(1)
+        raise torch.OutOfMemoryError("simulated")
+
+    packed.state.runner._capture = oom
+    monkeypatch.setattr(packed.state.engine, "forward_packed", oom)
+    with pytest.warns(UserWarning, match="dropped them"), pytest.raises(torch.OutOfMemoryError), torch.no_grad():
+        packed.forward_packed(batch)
+    assert len(calls) == 2           # one failed capture and one failed eager attempt
+    assert packed.state.runner is None and not packed.graph_enabled

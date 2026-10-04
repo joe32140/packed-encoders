@@ -37,18 +37,19 @@ class _Prologue:
 # ---------------------------------------------------------------------------
 
 
-def _rope_tables(
-    seq_len: int, head_dim: int, theta: float, device, dtype
-) -> tuple[Tensor, Tensor]:
-    """cos, sin of shape [1, S, D] (the rope kernel only reads the [S, D] slice)."""
-    inv_freq = 1.0 / (
-        theta
-        ** (torch.arange(0, head_dim, 2, device=device, dtype=torch.float32) / head_dim)
-    )
-    pos = torch.arange(seq_len, device=device, dtype=torch.float32)
-    freqs = torch.outer(pos, inv_freq)
-    emb = torch.cat((freqs, freqs), dim=-1)
-    return emb.cos().unsqueeze(0).to(dtype), emb.sin().unsqueeze(0).to(dtype)
+# Compatibility alias for callers constructing tables directly.
+from packed_encoders.pieces.rope import prepare_tables as _rope_tables
+
+
+def _execution_for(model, execution=None):
+    if execution is not None:
+        return execution
+    state = getattr(model, ATTR, None)
+    if state is not None and state.execution is not None:
+        return state.execution
+    from packed_encoders.arch.modernbert_pieces import default_execution
+
+    return default_execution()
 
 
 def _build_masks(
@@ -103,6 +104,7 @@ def prologue(
     input_ids: Tensor,
     attention_mask: Tensor | None,
     *,
+    execution=None,
     dense_mask: bool = False,
     capture_safe: bool = False,
 ) -> _Prologue:
@@ -112,20 +114,21 @@ def prologue(
     keyed on a fixed shape sees a consistent mask on replay. `capture_safe=True`
     removes this region's only host sync, letting the whole prologue be captured.
     """
+    execution = _execution_for(model, execution)
     b, s = input_ids.shape
     device = input_ids.device
 
     emb = model.embeddings.tok_embeddings(input_ids)
     norm = model.embeddings.norm
-    x = ops.fused_layer_norm(emb, norm.weight, norm.eps)
+    x = execution.layer_norm(emb, norm.weight, norm.eps)
     dtype = x.dtype
 
     head_dim = params.head_dim
-    cos_g, sin_g = _rope_tables(s, head_dim, params.global_rope_theta, device, dtype)
+    cos_g, sin_g = execution.rope_tables(s, head_dim, params.global_rope_theta, device, dtype)
     if params.local_rope_theta == params.global_rope_theta:
         cos_l, sin_l = cos_g, sin_g
     else:
-        cos_l, sin_l = _rope_tables(s, head_dim, params.local_rope_theta, device, dtype)
+        cos_l, sin_l = execution.rope_tables(s, head_dim, params.local_rope_theta, device, dtype)
 
     full_mask, sliding_mask = _build_masks(
         attention_mask, s, params.sliding_half_window, device
@@ -168,6 +171,7 @@ def _encoder_layer(
     mask: Tensor | None,
     window: tuple[int, int],
     backend: str,
+    execution,
     cu_seqlens: Tensor | None = None,
     max_seqlen: int | None = None,
 ) -> tuple[Tensor, Tensor]:
@@ -180,29 +184,34 @@ def _encoder_layer(
         # Keep this defensive fallback correct for architecture variants.
         if pending_residual is not None:
             x = x + pending_residual
-        qkv = F.linear(x, layer.attn.Wqkv.weight, None)
+        qkv = execution.dense_linear(x, layer.attn.Wqkv.weight)
     else:
         if pending_residual is None:
-            normed = ops.fused_layer_norm(x, attn_norm.weight, attn_norm.eps)
+            normed = execution.layer_norm(x, attn_norm.weight, attn_norm.eps)
         else:
-            x, normed = ops.fused_add_layer_norm(
+            x, normed = execution.add_layer_norm(
                 x, pending_residual, attn_norm.weight, attn_norm.eps
             )
-        qkv = ops._linear(normed, layer.attn.Wqkv.weight)
+        qkv = execution.linear(normed, layer.attn.Wqkv.weight)
 
     if ops.use_bshd_rope_flash(backend, h, d, cu_seqlens):
         # Inference flash fast path: RoPE reads the packed qkv and hands flash its native
         # [.., S, H, D] layout — no transpose to [B,H,S,D], no .contiguous() copy.
-        ctx = ops.flash_attention_qkv_bshd(
-            qkv, h, d, cos=cos, sin=sin, window=window, scaling=params.scaling,
+        q, k = execution.rope_qkv(qkv, h, d, cos, sin)
+        v = qkv.view(*qkv.shape[:-1], 3, h, d)[..., 2, :, :]
+        ctx = execution.attention_bshd(
+            q, k, v, window=window, scaling=params.scaling,
             cu_seqlens=cu_seqlens, max_seqlen=max_seqlen, backend=backend,
         )
+        # The original RoPE+attention helper released these before Wo/MLP.
+        # Preserve that buffer lifetime when composing separate pieces.
+        del q, k, v
     else:
         qkv = qkv.view(b, s, 3, h, d)
         q, k, v = qkv.unbind(dim=2)
         q, k, v = q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2)
-        q, k = ops.fused_apply_rope(q, k, cos, sin)
-        ctx = ops.attention(
+        q, k = execution.rope(q, k, cos, sin)
+        ctx = execution.attention(
             q,
             k,
             v,
@@ -213,16 +222,15 @@ def _encoder_layer(
             cu_seqlens=cu_seqlens,
             max_seqlen=max_seqlen,
         )
-    wo_out = ops._linear(ctx, layer.attn.Wo.weight)
+    wo_out = execution.linear(ctx, layer.attn.Wo.weight)
     mlp_norm = layer.mlp_norm
-    x, normed = ops.fused_add_layer_norm(
+    x, normed = execution.add_layer_norm(
         x, wo_out, mlp_norm.weight, mlp_norm.eps
     )
     # Do not materialize this residual add.  The next layer's attn_norm (or the
     # model's final_norm) consumes it in its fused add+LN kernel.
-    pending_residual = ops.geglu_mlp(
-        normed, layer.mlp.Wi.weight, layer.mlp.Wo.weight
-    )
+    proj = execution.linear(normed, layer.mlp.Wi.weight)
+    pending_residual = execution.linear(execution.geglu(proj), layer.mlp.Wo.weight)
     return x, pending_residual
 
 
@@ -237,6 +245,7 @@ def core(
     full_mask: Tensor | None,
     sliding_mask: Tensor,
     *,
+    execution=None,
     backend: str = "sdpa",
     cu_seqlens: Tensor | None = None,
     max_seqlen: int | None = None,
@@ -246,6 +255,7 @@ def core(
     Each layer gets a dense mask (sdpa backend) and a window (flash backend): global
     layers `(-1, -1)`, local layers the sliding band. `cu_seqlens`/`max_seqlen` (the
     packed varlen path) pass through to flash; masks are unused there."""
+    execution = _execution_for(model, execution)
     half = params.sliding_half_window
     global_window = (-1, -1)
     local_window = (half, half)
@@ -265,13 +275,14 @@ def core(
             mask,
             window,
             backend,
+            execution,
             cu_seqlens=cu_seqlens,
             max_seqlen=max_seqlen,
         )
     final_norm = model.final_norm
     if pending_residual is None:
-        return ops.fused_layer_norm(x, final_norm.weight, final_norm.eps)
-    _, out = ops.fused_add_layer_norm(
+        return execution.layer_norm(x, final_norm.weight, final_norm.eps)
+    _, out = execution.add_layer_norm(
         x, pending_residual, final_norm.weight, final_norm.eps
     )
     return out
@@ -420,6 +431,7 @@ def packed_forward(
     max_seqlen: int,
     position_ids: Tensor,
     *,
+    execution=None,
     backend: str | None = None,
     _allow_graph: bool = True,
 ) -> Tensor:
@@ -457,6 +469,8 @@ def packed_forward(
     if (
         _allow_graph
         and state is not None
+        and state.graph_enabled
+        and (execution is None or execution is state.execution)
         and requested_backend == state.attention_backend
         and state.packed_graph_runner is not None
         and os.environ.get(_GRAPH_ENV, "1") != "0"
@@ -467,24 +481,25 @@ def packed_forward(
             packed_ids, cu_seqlens, max_seqlen, position_ids
         )
 
+    execution = _execution_for(model, execution)
     device = packed_ids.device
 
     # Embed only the real tokens.
     emb = model.embeddings.tok_embeddings(packed_ids)
     norm = model.embeddings.norm
-    x_packed = ops.fused_layer_norm(emb, norm.weight, norm.eps)
+    x_packed = execution.layer_norm(emb, norm.weight, norm.eps)
     dtype = x_packed.dtype
 
     # RoPE tables up to the longest real sequence only (position_ids < max_seqlen),
     # then gather per token — same values as the full [0, S) table the dense path uses.
     head_dim = params.head_dim
-    cos_g, sin_g = _rope_tables(
+    cos_g, sin_g = execution.rope_tables(
         max_seqlen, head_dim, params.global_rope_theta, device, dtype
     )
     if params.local_rope_theta == params.global_rope_theta:
         cos_l, sin_l = cos_g, sin_g
     else:
-        cos_l, sin_l = _rope_tables(
+        cos_l, sin_l = execution.rope_tables(
             max_seqlen, head_dim, params.local_rope_theta, device, dtype
         )
 
@@ -496,7 +511,7 @@ def packed_forward(
     )
     if packed_backend == "sdpa":
         return _packed_sdpa_fallback(
-            model, params, packed_ids, cu_seqlens, max_seqlen, position_ids
+            model, params, packed_ids, cu_seqlens, max_seqlen, position_ids, execution=execution
         )
 
     out = core(
@@ -509,7 +524,7 @@ def packed_forward(
         gather(sin_l),
         None,
         None,
-        backend=packed_backend,
+        backend=packed_backend, execution=execution,
         cu_seqlens=cu_seqlens,
         max_seqlen=max_seqlen,
     )
@@ -582,6 +597,7 @@ def _packed_sdpa_fallback(
     cu_seqlens: Tensor,
     max_seqlen: int,
     position_ids: Tensor,
+    *, execution=None,
 ) -> Tensor:
     """Re-pad an already-packed batch for the dependency-free SDPA fallback."""
     n_sequences = cu_seqlens.numel() - 1
@@ -599,6 +615,7 @@ def _packed_sdpa_fallback(
         padded_ids.view(n_sequences, int(max_seqlen)),
         attention_mask.view(n_sequences, int(max_seqlen)),
         backend="sdpa",
+        **({"execution": execution} if execution is not None else {}),
     )
     return padded_out.reshape(-1, padded_out.shape[-1]).index_select(0, flat_indices)
 
@@ -621,6 +638,7 @@ def _varlen_forward(
     attention_mask: Tensor,
     *,
     backend: str = "flash",
+    execution=None,
 ) -> Tensor:
     """Run the encoder on the packed (unpadded) batch as a single `b=1` sequence,
     then re-pad. Internally: `_unpad` → `packed_forward` → `_repad`, i.e. the packed
@@ -634,7 +652,7 @@ def _varlen_forward(
     packed_ids = packed_ids.squeeze(-1)
     out = packed_forward(
         model, params, packed_ids, cu_seqlens, max_seqlen, position_ids,
-        backend=backend,
+        backend=backend, execution=execution,
     )
     return _repad(out, indices, b, s)
 
@@ -645,6 +663,7 @@ def fused_forward(
     input_ids: Tensor,
     attention_mask: Tensor | None,
     *,
+    execution=None,
     backend: str = "sdpa",
 ) -> Tensor:
     """Eager fused-tail forward — returns the final-normed hidden state.
@@ -674,9 +693,9 @@ def fused_forward(
             if attention_mask is None:
                 attention_mask = torch.ones_like(input_ids)
             return _varlen_forward(
-                model, params, input_ids, attention_mask, backend=backend
+                model, params, input_ids, attention_mask, backend=backend, execution=execution
             )
-    p = prologue(model, params, input_ids, attention_mask)
+    p = prologue(model, params, input_ids, attention_mask, execution=execution)
     return core(
         model,
         params,
@@ -687,5 +706,5 @@ def fused_forward(
         p.sin_local,
         p.full_mask,
         p.sliding_mask,
-        backend=resolved,
+        backend=resolved, execution=execution,
     )

@@ -13,7 +13,6 @@ from typing import Any, Callable
 
 from packed_encoders.config import ModernBertParams
 from packed_encoders.errors import PackedEncodersError
-from packed_encoders.locate import find_encoder
 
 ATTR = "_packed_encoders"
 
@@ -30,16 +29,33 @@ class PatchState:
     packed_graph_runner: Any = None  # graph._PackedGraphRunner | None
     train_graph_runner: Any = None   # train_graph._TrainGraphRunner | None
     train_graph_enabled: bool = False
+    validation_report: Any = None
+    pieces: Any = None             # immutable ModernBertPieces selection
+    execution: Any = None          # its pre-bound operation callables
 
 
-def get_state(target: object) -> PatchState:
-    """Return the patch state of an already-patched target, or raise. ModernBERT stores a
-    `PatchState`; other architectures store their own state object, each exposing at least
-    `graph_enabled` and `set_cuda_graph(enabled, config)`."""
-    encoder = find_encoder(target)
-    state = getattr(encoder, ATTR, None)
-    if state is None or not (isinstance(state, PatchState) or hasattr(state, "set_cuda_graph")):
-        raise PackedEncodersError(
-            "this model has not been patched with packed_encoders.pack()"
-        )
-    return state
+# Kept separate from ATTR: existing kernels and direct packed_forward callers
+# continue to read the original ModernBERT PatchState without another indirection.
+INSTALL_ATTR = "_packed_encoders_installation"
+
+
+def find_installation(target: object):
+    from packed_encoders.locate import walk_targets
+
+    for module in walk_targets(target):
+        installed = getattr(module, INSTALL_ATTR, None)
+        if installed is not None:
+            return installed
+    return None
+
+
+def get_installation(target: object):
+    installed = find_installation(target)
+    if installed is None:
+        raise PackedEncodersError("this model has not been patched with packed_encoders.pack()")
+    return installed
+
+
+def get_state(target: object):
+    """Return the recorded engine's native runtime state without matching again."""
+    return get_installation(target).packed.state
