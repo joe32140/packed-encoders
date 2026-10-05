@@ -40,6 +40,18 @@ GRAPH_MEAN_COS, GRAPH_MIN_COS = 0.9995, 0.99
 _BACKENDS = {None: None, "auto": None, "flash": ("flash4", "flash2", "torch_varlen"), "sdpa": ("sdpa",)}
 
 
+def _validation_ids_below(cfg) -> int:
+    """Validation's random token ids come from the regular vocabulary, below this. Qwen tokenizers put their
+    special tokens after it, then the embedding's padding rows: ids no tokenizer emits, rows training never
+    reached. One of those in a row can take the model's own bf16 forward far from fp32 (Qwen3.5-4B on an
+    L40S: cosine 0.87 on that token, the engine 0.97), so a check there measures the reference, not the
+    engine. The lowest special token the config names in the embedding's upper half starts that tail."""
+    rows = cfg.vocab_size
+    named = [i for k, v in vars(cfg).items() if k.endswith("_token_id")
+             for i in (v if isinstance(v, (list, tuple)) else (v,)) if isinstance(i, int) and rows // 2 <= i < rows]
+    return min(named, default=rows)
+
+
 def _topk_text_model(module: nn.Module) -> nn.Module | None:
     cfg = getattr(module, "config", None)
     if getattr(cfg, "model_type", None) != "topk_embed" or not isinstance(getattr(module, "head", None), nn.Linear):
@@ -276,7 +288,7 @@ class Qwen35Hybrid:
     def _check_numerics(self, module, oracle, state: TopkState, lengths, graphs, report: Qwen35Report) -> None:
         device = state.head.device
         g = torch.Generator().manual_seed(0)
-        seqs = [torch.randint(0, state.engine.cfg.vocab_size, (n,), generator=g) for n in lengths]
+        seqs = [torch.randint(0, _validation_ids_below(state.engine.cfg), (n,), generator=g) for n in lengths]
         B, S = len(seqs), max(lengths)
         lens = torch.tensor(lengths)
         packed = torch.cat(seqs)

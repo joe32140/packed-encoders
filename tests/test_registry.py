@@ -320,3 +320,12 @@ def test_qwen_rejects_options_before_loading_kernels(options):
     from packed_encoders.arch.qwen3_5 import Qwen35Hybrid
     with pytest.raises(PackedEncodersError):
         Qwen35Hybrid().prepare(None, options)
+
+
+def test_qwen_validation_ids_stop_before_the_special_tokens():
+    from packed_encoders.arch.qwen3_5 import _validation_ids_below
+    qwen = SimpleNamespace(vocab_size=248320, eos_token_id=248044, pad_token_id=None, image_token_id=248056)
+    assert _validation_ids_below(qwen) == 248044
+    assert _validation_ids_below(SimpleNamespace(vocab_size=1024, eos_token_id=[2, 1000], bos_token_id=1)) == 1000
+    assert _validation_ids_below(SimpleNamespace(vocab_size=1024, eos_token_id=2, pad_token_id=0)) == 1024
+    assert _validation_ids_below(SimpleNamespace(vocab_size=1024, eos_token_id=None)) == 1024
