@@ -162,7 +162,8 @@ end-to-end training-recipe performance. Use the showcase protocols for those cla
 `Qwen35Hybrid` is the curated engine for the xsmall/small topk wrapper. Its
 `TopkEmbedAdapter` binds the wrapper as the patch target and `model.language_model`
 as the weight source. The existing dispatcher owns installation, validation,
-controls and teardown. Plain HF Qwen3.5 entry points are not installed by this PR.
+controls and teardown. Stock HF Qwen3.5 models bind through `HFQwen35Adapter`
+([below](#stock-hf-qwen35-models)).
 
 The adapter preserves topk's padded per-token vectors: projection through its head,
 output-dimension slice, optional normalization and zero padding. Grad-enabled calls
@@ -232,3 +233,46 @@ Install the complete topk environment with
 `uv sync --locked --no-dev --extra qwen3_5 --extra fa2`. The lockfile uses
 Torch 2.11 / CUDA 12.8 for both engines. See [the installation review](torch-2.11-review.md)
 for installation details and the separate PyLate environment requirement.
+
+### Stock HF Qwen3.5 models
+
+`HFQwen35Adapter` binds transformers' own `Qwen3_5TextModel` and `Qwen3_5Model`
+(subclasses included) as the patch target and the text model as the weight source. Topk's
+adapter is tried first, since its wrapper holds a stock `Qwen3_5Model`. The patched forward
+keeps HF's contract: `input_ids` / `attention_mask`, right or left padded, in;
+`last_hidden_state` out, with pads as zeros. Attention is causal or bidirectional as
+`config.is_causal` says (absent means causal), the same rule HF's masks follow. The model's
+own pooling or head then runs unchanged:
+
+```python
+model = AutoModel.from_pretrained(model_id, dtype=torch.bfloat16).to("cuda")   # Qwen3_5Model or a subclass
+pe.pack(model, cuda_graph=False)                 # multi-row batches: see "CUDA graphs on large models"
+batch = tokenizer(texts, padding=True, return_tensors="pt").to("cuda")
+with torch.no_grad():
+    hidden = model(**batch).last_hidden_state    # pads are zeros; pool or read out as before
+```
+
+A model that wraps the backbone in its own module, such as a decision model with a readout
+over the last token, packs the `Qwen3_5Model` it holds; the readout then runs on the returned
+hidden states.
+
+Text batches carrying the `mm_token_type_ids` that Qwen3-VL processors always return still
+run packed. Calls the engine can't serve run the original forward unchanged: images,
+gradients, a KV cache (`past_key_values`, `use_cache=True`), explicit `position_ids` /
+`inputs_embeds`, extra outputs (`output_hidden_states`, ...) and masks with holes. The
+engine runs in bf16; when a checkpoint ships fp32 weights, check quality against fp32 on
+your data.
+
+**CUDA graphs on large models.** Graphs remove launch overhead, but a graph also runs every
+row padded to its bucket. On a large model, the overhead saving still pays for single-row
+calls, while the padding dominates multi-row batches:
+
+| Model, GPU | Batch | Without graphs → with graphs |
+|---|---|---|
+| 27B, causal, H100 | 1 row | 6.38 → 7.91 items/s |
+| 27B, causal, H100 | 8 rows | unchanged |
+| 9B, bidirectional, L40S | 32 queries | roughly halved |
+
+Measured on pplx-decider-v1-27b's backbone, with `PaddedGraphConfig(row_buckets=(1, 8),
+max_tokens=8192, max_seq=4096)`, and on pplx-embed-v2-context-9b-preview. Pack large models
+with `cuda_graph=False` for padded batches, and keep graphs for single-row traffic.

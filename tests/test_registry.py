@@ -309,7 +309,61 @@ def test_topk_binding_separates_patch_target_from_weights():
     assert isinstance(engine, Qwen35Hybrid)
     assert binding.patch_target is model
     assert binding.weight_source is model.model.language_model
-    assert base.select(model.model.language_model) is None  # no plain HF adapter yet
+    assert base.select(model.model.language_model) is None  # not a transformers Qwen3.5 class
+
+
+def test_hf_binding_matches_stock_qwen35_classes_after_topk():
+    pytest.importorskip("transformers.models.qwen3_5.modeling_qwen3_5")
+    from transformers.models.qwen3_5.configuration_qwen3_5 import Qwen3_5Config
+    from transformers.models.qwen3_5.modeling_qwen3_5 import Qwen3_5Model
+
+    from packed_encoders.arch.qwen3_5 import HFQwen35Adapter, TopkEmbedAdapter
+    from packed_encoders.locate import select_engine
+
+    class Stock(Qwen3_5Model):  # models built on Qwen3.5 subclass it
+        pass
+
+    text = dict(vocab_size=64, hidden_size=64, intermediate_size=64, num_hidden_layers=2, num_attention_heads=2,
+                num_key_value_heads=1, head_dim=256, linear_num_key_heads=2, linear_num_value_heads=2,
+                linear_key_head_dim=16, linear_value_head_dim=16, layer_types=["linear_attention", "full_attention"])
+    vision = dict(depth=1, hidden_size=32, intermediate_size=64, num_heads=2, out_hidden_size=64,
+                  num_position_embeddings=16)
+    model = Stock(Qwen3_5Config(text_config=text, vision_config=vision))
+    _, binding = base.select(model)
+    assert isinstance(binding.adapter, HFQwen35Adapter)
+    assert binding.patch_target is model and binding.weight_source is model.language_model
+    _, binding = base.select(model.language_model)
+    assert binding.patch_target is binding.weight_source is model.language_model
+    # topk's wrapper holds a stock Qwen3_5Model: the walk meets the wrapper first, and topk binds it.
+    wrapper = nn.Module()
+    wrapper.config = SimpleNamespace(model_type="topk_embed")
+    wrapper.head = nn.Linear(64, 4, bias=False)
+    wrapper.model = model
+    _, binding = select_engine(SimpleNamespace(auto_model=wrapper))
+    assert isinstance(binding.adapter, TopkEmbedAdapter) and binding.patch_target is wrapper
+
+
+def test_hf_rows_take_right_or_left_padding_and_refuse_the_rest():
+    from packed_encoders.arch.qwen3_5 import _hf_rows
+
+    state = SimpleNamespace(engine=SimpleNamespace(causal=True))
+    ids = torch.zeros(3, 5, dtype=torch.long)
+    mask = torch.tensor([[1, 1, 1, 0, 0], [0, 0, 1, 1, 1], [1, 1, 1, 1, 1]])
+    holes, empty = mask.clone(), mask.clone()
+    holes[0, 1] = 0
+    empty[1] = 0
+    text_only = {"use_cache": False, "return_dict": True, "pixel_values": None, "is_causal": True,
+                 "mm_token_type_ids": torch.zeros_like(ids)}
+    with torch.no_grad():
+        assert _hf_rows(state, ids, mask, (), {}) == ([3, 3, 5], [0, 2, 0])
+        assert _hf_rows(state, ids, mask.bool(), (), text_only) == ([3, 3, 5], [0, 2, 0])
+        assert _hf_rows(state, ids, None, (), {}) == ([5, 5, 5], [0, 0, 0])
+        for m, args, kwargs in [(holes, (), {}), (empty, (), {}), (mask[:, :4], (), {}), (mask, (None,), {}),
+                                (mask, (), {"use_cache": True}), (mask, (), {"output_hidden_states": True}),
+                                (mask, (), {"position_ids": ids}), (mask, (), {"is_causal": False}),
+                                (mask, (), {"pixel_values": torch.zeros(1)})]:
+            assert _hf_rows(state, ids, m, args, kwargs) is None, (m, args, kwargs)
+    assert _hf_rows(state, ids, mask, (), {}) is None  # grad enabled
 
 
 @pytest.mark.parametrize("options", [

@@ -1,16 +1,20 @@
 """Qwen3.5 hybrid backbones (GatedDeltaNet + gated softmax attention).
 
 The engine (`engine.Qwen35Engine`) is per *backbone*; entry adapters are per *wrapper
-signature*. Today there is one entry, topk-embed-v1 (`TopkEmbedModel`, xsmall and small):
-its HF forward receives an already-packed batch and returns padded per-token vectors, and
-the patched forward keeps that contract exactly, so `SentenceTransformer.encode()` inherits
-the speedup with no adapter. A plain HF `Qwen3_5TextModel` entry (causal, padded) would be a
-second adapter over the same engine.
+signature*, and each patched forward keeps its wrapper's contract exactly:
+  - topk-embed-v1 (`TopkEmbedModel`, xsmall and small): its HF forward receives an
+    already-packed batch and returns padded per-token vectors, so
+    `SentenceTransformer.encode()` inherits the speedup with no adapter.
+  - stock HF (`Qwen3_5TextModel`, or `Qwen3_5Model` and its subclasses, such as embedding
+    models and the backbones of decision models): `input_ids` + `attention_mask` (right or
+    left padded) in, padded `last_hidden_state` out, causal or bidirectional as
+    `config.is_causal` says. The model's own pooling or readout then runs unchanged.
 
 What `pack()` installs, per batch:
   - text batches, no grad: CUDA graph replay when the batch fits a `(rows, S)` bucket, else the
-    eager packed engine; then the model's own head, slice, and L2 norm.
-  - image batches or grad-enabled calls: the original forward, untouched.
+    eager packed engine; then (topk) the model's own head, slice, and L2 norm.
+  - image batches, grad-enabled calls, and anything else the engine can't serve: the
+    original forward, untouched.
 
 fla (flash-linear-attention) is imported only when a Qwen3.5 model is actually packed.
 """
@@ -50,6 +54,18 @@ def _topk_text_model(module: nn.Module) -> nn.Module | None:
     return lm
 
 
+def _hf_text_model(module: nn.Module) -> nn.Module | None:
+    """`Qwen3_5TextModel`, or the one a `Qwen3_5Model` (or subclass) holds as `.language_model`.
+    By class name along the MRO, so matching never imports transformers' Qwen3.5 code."""
+    names = {c.__name__ for c in type(module).__mro__ if c.__module__.startswith("transformers.models.qwen3_5.")}
+    if "Qwen3_5TextModel" in names:
+        return module
+    if "Qwen3_5Model" in names:
+        lm = getattr(module, "language_model", None)
+        return lm if lm is not None and _hf_text_model(lm) is lm else None
+    return None
+
+
 @dataclass
 class Qwen35Report:
     capability: tuple[int, int]
@@ -75,15 +91,15 @@ class Qwen35Report:
 
 
 @dataclass
-class TopkState:
-    """Attached to the packed `TopkEmbedModel` under `ATTR`."""
+class Qwen35State:
+    """Attached to the packed model under `ATTR`; a stock HF model has no head (`head=None`)."""
 
     arch: str
     engine: Any
     original_forward: Any
     runner: PaddedGraphRunner | None
     graph_enabled: bool
-    head: Tensor
+    head: Tensor | None
     dim: int
     normalize: bool
     stager: PinnedStager
@@ -99,12 +115,14 @@ class TopkState:
         self.graph_enabled = enabled
 
 
-def _vectors(state: TopkState, hidden: Tensor) -> Tensor:
+def _vectors(state: Qwen35State, hidden: Tensor) -> Tensor:
+    if state.head is None:
+        return hidden
     v = F.linear(hidden, state.head).float()[..., : state.dim]
     return F.normalize(v, p=2, dim=-1) if state.normalize else v
 
 
-def _hidden_once(state: TopkState, ids: Tensor, lengths, *, graphs: bool) -> Tensor:
+def _hidden_once(state: Qwen35State, ids: Tensor, lengths, *, graphs: bool) -> Tensor:
     state.engine.sync_norms()                 # norms trained since packing reach the graphs too
     hidden = None
     if graphs and state.runner is not None and state.graph_enabled and not graphs_globally_disabled() \
@@ -115,7 +133,7 @@ def _hidden_once(state: TopkState, ids: Tensor, lengths, *, graphs: bool) -> Ten
     return hidden
 
 
-def _with_graph_recovery(state: TopkState, forward) -> Tensor:
+def _with_graph_recovery(state: Qwen35State, forward) -> Tensor:
     # Keep each attempt in its own frame so failed outputs and the exception's
     # traceback release their allocations before graph cleanup and eager retry.
     for attempt in (0, 1):
@@ -128,7 +146,7 @@ def _with_graph_recovery(state: TopkState, forward) -> Tensor:
         _drop_graphs(state, reason)          # outside the handler: its traceback would keep the graphs alive
 
 
-def _drop_graphs(state: TopkState, reason: str) -> None:
+def _drop_graphs(state: Qwen35State, reason: str) -> None:
     """Graphs are an optimisation, and their private memory pool can't lend to the eager path: out of
     GPU memory with graphs held, free them all and continue eager."""
     with torch.cuda.device(state.engine.device):
@@ -140,15 +158,15 @@ def _drop_graphs(state: TopkState, reason: str) -> None:
                   "PaddedGraphConfig(max_tokens=...).", stacklevel=3)
 
 
-def _hidden(state: TopkState, ids: Tensor, lengths, *, graphs: bool) -> Tensor:
+def _hidden(state: Qwen35State, ids: Tensor, lengths, *, graphs: bool) -> Tensor:
     return _with_graph_recovery(state, lambda: _hidden_once(state, ids, lengths, graphs=graphs))
 
 
-def _encode_text(state: TopkState, ids: Tensor, lengths, *, graphs: bool) -> Tensor:
+def _encode_text(state: Qwen35State, ids: Tensor, lengths, *, graphs: bool) -> Tensor:
     return _with_graph_recovery(state, lambda: _vectors(state, _hidden_once(state, ids, lengths, graphs=graphs)))
 
 
-def _make_topk_forward(module: nn.Module, state: TopkState):
+def _make_topk_forward(module: nn.Module, state: Qwen35State):
     def forward(input_ids, attention_mask, packed_ids, position_ids, cu_seqlens, seq_idx, pixel_values=None,
                 image_scatter_index=None, vision_inputs=None, return_dict=True):
         if any(x is not None for x in (pixel_values, image_scatter_index, vision_inputs)) or torch.is_grad_enabled():
@@ -176,6 +194,69 @@ def _make_topk_forward(module: nn.Module, state: TopkState):
     return forward
 
 
+def _hf_rows(state: Qwen35State, input_ids, attention_mask, args, kwargs) -> tuple[list[int], list[int]] | None:
+    """Per-row token counts and first real column, or None when the engine can't serve the call."""
+    if args or input_ids is None or input_ids.dim() != 2 or torch.is_grad_enabled():
+        return None
+    for k, v in kwargs.items():
+        if k == "is_causal":
+            if v is None or bool(v) == state.engine.causal:
+                continue
+            return None
+        # mm_token_type_ids (Qwen3-VL processors always return it) only matters next to image or video inputs.
+        if k in ("return_dict", "mm_token_type_ids") or v is None or v is False:
+            continue
+        return None          # images, inputs_embeds, position_ids, a cache or use_cache=True, extra outputs
+    B, S = input_ids.shape
+    if attention_mask is None:
+        return [S] * B, [0] * B
+    if attention_mask.shape != input_ids.shape:
+        return None
+    real = attention_mask != 0
+    lens = real.sum(1)
+    col = torch.arange(S, device=real.device)
+    right = (real == (col < lens[:, None])).all(1)
+    left = (real == (col >= S - lens[:, None])).all(1)
+    flat = torch.cat([lens, right.long(), left.long()]).tolist()      # the only device->host read
+    lengths, right, left = flat[:B], flat[B:2 * B], flat[2 * B:]
+    if min(lengths) == 0 or not all(r or l for r, l in zip(right, left)):
+        return None          # an empty row, or a mask with holes
+    return lengths, [0 if r else S - n for n, r in zip(lengths, right)]
+
+
+def _make_hf_forward(module: nn.Module, state: Qwen35State):
+    from transformers.models.qwen3_5.modeling_qwen3_5 import Qwen3_5ModelOutputWithPast
+
+    def forward(input_ids=None, attention_mask=None, *args, **kwargs):
+        rows = _hf_rows(state, input_ids, attention_mask, args, kwargs)
+        if rows is None:
+            if not state.fallback_warned:
+                state.fallback_warned = True
+                warnings.warn("packed-encoders: this call runs the model's original forward (images, gradients, "
+                              "a KV cache, position_ids / inputs_embeds, extra outputs or a mask with holes)",
+                              stacklevel=2)
+            return state.original_forward(input_ids, attention_mask, *args, **kwargs)
+        lengths, starts = rows
+        B, S = input_ids.shape
+        ids = input_ids.reshape(-1)
+        if sum(lengths) == B * S:
+            out = _encode_text(state, ids, lengths, graphs=True).view(B, S, -1)
+        else:
+            # Row i's tokens are the flat slots [i*S + start_i, i*S + start_i + len_i); built on host.
+            lens = torch.as_tensor(lengths, dtype=torch.long)
+            first = torch.arange(B) * S + torch.as_tensor(starts, dtype=torch.long)
+            idx = torch.arange(int(lens.sum())) + torch.repeat_interleave(first - (torch.cumsum(lens, 0) - lens), lens)
+            (d_idx,) = state.stager.put([idx])
+            hidden = _encode_text(state, ids.index_select(0, d_idx), lengths, graphs=True)
+            out = hidden.new_zeros((B * S, hidden.shape[-1])).index_copy_(0, d_idx, hidden).view(B, S, -1)
+        return_dict = kwargs.get("return_dict")
+        if return_dict is None:
+            return_dict = getattr(module.config, "return_dict", True)
+        return Qwen3_5ModelOutputWithPast(last_hidden_state=out) if return_dict else (out,)
+
+    return forward
+
+
 class TopkEmbedAdapter:
     name = "topk-embed-v1"
 
@@ -186,6 +267,18 @@ class TopkEmbedAdapter:
     def install(self, binding: ModelBinding, packed) -> None:
         setattr(binding.patch_target, ATTR, packed.state)
         binding.patch_target.forward = _make_topk_forward(binding.patch_target, packed.state)
+
+
+class HFQwen35Adapter:
+    name = "hf-qwen3_5"
+
+    def bind(self, module: object) -> ModelBinding | None:
+        lm = _hf_text_model(module)
+        return ModelBinding(self, module, lm) if lm is not None else None
+
+    def install(self, binding: ModelBinding, packed) -> None:
+        setattr(binding.patch_target, ATTR, packed.state)
+        binding.patch_target.forward = _make_hf_forward(binding.patch_target, packed.state)
 
 
 def _check_options(options):
@@ -203,7 +296,7 @@ def _check_options(options):
 
 class Qwen35Hybrid:
     name = "qwen3_5"
-    adapters = (TopkEmbedAdapter(),)
+    adapters = (TopkEmbedAdapter(), HFQwen35Adapter())
 
     def __init__(self, *, pieces=None):
         self.pieces = pieces
@@ -233,7 +326,7 @@ class Qwen35Hybrid:
         return device, fla.__version__
 
     def _validate(self, module: nn.Module, *, batches: tuple[tuple[int, ...], ...] = ((7, 129, 300, 64), (3, 21, 30)),
-                 graphs: bool = True, _engine=None, _state: TopkState | None = None) -> Qwen35Report:
+                 graphs: bool = True, _engine=None, _state: Qwen35State | None = None) -> Qwen35Report:
         """Build (or reuse) the engine and compare it with the model's own forward on random text
         rows, on this device, eager and graphed. The default batches cover both GatedDeltaNet
         kernels (eager, a batch whose rows are all <= RECURRENT_MAX_LEN tokens runs the recurrent
@@ -260,21 +353,17 @@ class Qwen35Hybrid:
             with torch.cuda.device(device):
                 report.pieces = engine.composition.validate(engine)
             oracle = state.original_forward if state is not None else module.forward
-            probe_state = state or TopkState(
-                arch=self.name, engine=engine, original_forward=oracle, runner=None, graph_enabled=False,
-                head=module.head.weight, dim=module.config.output_dim or module.config.dim,
-                normalize=bool(module.config.normalize), stager=PinnedStager(device))
+            probe_state = state or self._state(module, engine, oracle, runner=None, graph_enabled=False)
             for lengths in batches:
                 self._check_numerics(module, oracle, probe_state, lengths, graphs, report)
         finally:
             if built_here:
-                from packed_encoders.arch.qwen3_5.engine import unshare_rows
-
-                unshare_rows(engine.shared, rollback=True)
+                engine.release(rollback=True)
         return report
 
-    def _check_numerics(self, module, oracle, state: TopkState, lengths, graphs, report: Qwen35Report) -> None:
-        device = state.head.device
+    def _check_numerics(self, module, oracle, state: Qwen35State, lengths, graphs, report: Qwen35Report) -> None:
+        device = state.engine.device
+        topk = _topk_text_model(module) is not None
         g = torch.Generator().manual_seed(0)
         seqs = [torch.randint(0, state.engine.cfg.vocab_size, (n,), generator=g) for n in lengths]
         B, S = len(seqs), max(lengths)
@@ -283,23 +372,26 @@ class Qwen35Hybrid:
         cu = torch.zeros(B + 1, dtype=torch.long)
         torch.cumsum(lens, 0, out=cu[1:])
         pos = torch.arange(len(packed)) - torch.repeat_interleave(cu[:-1], lens)
-        feats = {
-            "input_ids": torch.nn.utils.rnn.pad_sequence(seqs, batch_first=True),
-            "attention_mask": torch.arange(S)[None] < lens[:, None],
-            "packed_ids": packed[None], "position_ids": pos[None], "cu_seqlens": cu,
-            "seq_idx": torch.repeat_interleave(torch.arange(B, dtype=torch.int32), lens),
-        }
-        feats = {k: v.to(device) for k, v in feats.items()}
+        mask = torch.arange(S)[None] < lens[:, None]
+        feats = {"input_ids": torch.nn.utils.rnn.pad_sequence(seqs, batch_first=True), "attention_mask": mask}
+        if topk:
+            feats.update(packed_ids=packed[None], position_ids=pos[None], cu_seqlens=cu,
+                         seq_idx=torch.repeat_interleave(torch.arange(B, dtype=torch.int32), lens))
+        else:
+            feats.update(attention_mask=mask.long(), use_cache=False)
+        feats = {k: v.to(device) if isinstance(v, Tensor) else v for k, v in feats.items()}
+        mask = mask.to(device)
         with torch.no_grad():
             try:
-                ref = oracle(**feats)[feats["attention_mask"]].float()
+                out = oracle(**feats)
+                ref = (out if topk else out[0])[mask].float()
             except Exception as exc:  # noqa: BLE001
                 raise ValidationError(
                     f"the model's own forward failed on the validation batch ({type(exc).__name__}: "
                     f"{str(exc).splitlines()[0][:200]}); cannot certify the engine here. Pass validate=False to "
                     "skip at your own risk.") from exc
-            ids = feats["packed_ids"].reshape(-1)
-            eager = _encode_text(state, ids, list(lengths), graphs=False)
+            ids = packed.to(device)
+            eager = _encode_text(state, ids, list(lengths), graphs=False).float()
             cos = F.cosine_similarity(eager, ref, dim=-1)
             mean, low = cos.mean().item(), cos.min().item()
             report.eager_cos_mean = mean if report.eager_cos_mean == 0.0 else min(report.eager_cos_mean, mean)
@@ -310,7 +402,7 @@ class Qwen35Hybrid:
             if graphs:
                 runner = PaddedGraphRunner(state.engine, PaddedGraphConfig(row_buckets=(B,), max_graphs=1))
                 hidden = runner(ids, list(lengths))
-                graphed = _vectors(state, hidden)
+                graphed = _vectors(state, hidden).float()
                 cos = F.cosine_similarity(graphed, eager, dim=-1)
                 mean, low = cos.mean().item(), cos.min().item()
                 del runner
@@ -327,8 +419,22 @@ class Qwen35Hybrid:
         if attention_backend not in _BACKENDS:
             raise PackedEncodersError(f"attention_backend for Qwen3.5 must be one of {sorted(map(str, _BACKENDS))}")
         lm = _topk_text_model(module)
-        return Qwen35Engine(lm, causal=bool(getattr(lm, "document_causal", False)),
-                            attention_order=_BACKENDS[attention_backend], pieces=self.pieces)
+        if lm is not None:   # topk flags causal documents on the module
+            causal = getattr(lm, "document_causal", False)
+        else:                # stock HF follows config.is_causal, as its own masks do (default causal)
+            lm = _hf_text_model(module)
+            causal = getattr(lm.config, "is_causal", True)
+        return Qwen35Engine(lm, causal=bool(causal), attention_order=_BACKENDS[attention_backend], pieces=self.pieces)
+
+    def _state(self, module: nn.Module, engine, original_forward, *, runner, graph_enabled) -> Qwen35State:
+        if _topk_text_model(module) is not None:
+            head, dim, normalize = (module.head.weight, module.config.output_dim or module.config.dim,
+                                    bool(module.config.normalize))
+        else:                # stock HF: the final-normed hidden states are the output
+            head, dim, normalize = None, engine.cfg.hidden_size, False
+        return Qwen35State(arch=self.name, engine=engine, original_forward=original_forward, runner=runner,
+                         graph_enabled=graph_enabled, head=head, dim=dim, normalize=normalize,
+                         stager=PinnedStager(engine.device))
 
     def validate(self, binding: ModelBinding, **kwargs) -> ValidationResult:
         return ValidationResult(self.name, self._validate(binding.patch_target, **kwargs))
@@ -338,26 +444,24 @@ class Qwen35Hybrid:
         module = binding.patch_target
         self._require_env(module)
         # The adapter reads the head directly as a bias-free projection too.
-        from packed_encoders.arch.qwen3_5.engine import _require_plain, unshare_rows
+        from packed_encoders.arch.qwen3_5.engine import _require_plain
 
-        _require_plain([module.head])
+        if _topk_text_model(module) is not None:
+            _require_plain([module.head])
         engine = self._engine(module, options.get("attention_backend"))
         try:
             graph = options.get("cuda_graph")
             use_graphs = graph is None or bool(graph)
-            state = TopkState(
-                arch=self.name, engine=engine, original_forward=module.forward,
+            state = self._state(
+                module, engine, module.forward,
                 runner=PaddedGraphRunner(engine, graph if isinstance(graph, PaddedGraphConfig) else None)
-                if use_graphs else None,
-                graph_enabled=use_graphs, head=module.head.weight,
-                dim=module.config.output_dim or module.config.dim, normalize=bool(module.config.normalize),
-                stager=PinnedStager(engine.device))
+                if use_graphs else None, graph_enabled=use_graphs)
             packed = PackedQwen35(self, binding, state, options.get("attention_backend"))
             if options.get("validate", True):
                 state.report = packed.validate(graphs=use_graphs).details
             return packed
         except BaseException:
-            unshare_rows(engine.shared, rollback=True)
+            engine.release(rollback=True)
             raise
 
 
@@ -385,11 +489,11 @@ class PackedQwen35:
         self.state.graph_enabled = enabled
 
     def forward_packed(self, batch):
-        """Return final-normed hidden states, before the topk head and normalization.
+        """Return final-normed hidden states (for topk, before its head and normalization).
 
         Requires flat device int64 IDs and positive host_lengths. Positions restart
         at zero for each sequence; omit other metadata (it is never silently ignored).
-        This entry is inference-only; the topk adapter owns the original-forward fallback.
+        This entry is inference-only; the adapters own the original-forward fallback.
         """
         self._require_open()
         ids, lengths = batch.input_ids, batch.host_lengths
@@ -429,18 +533,13 @@ class PackedQwen35:
     def close(self, *, rollback=False):
         if self._closed:
             return
-        from packed_encoders.arch.qwen3_5.engine import unshare_rows
-
         self.state.runner = None
         self.state.graph_enabled = False
         engine = self.state.engine
-        unshare_rows(engine.shared, rollback=rollback)
-        engine.layers.clear()
-        engine._norms.clear()
-        engine.w_final = None
+        engine.release(rollback=rollback)
         engine._stager = None
         self.state.stager = None
         self._closed = True
 
 
-__all__ = ["Qwen35Hybrid", "Qwen35Report", "PackedQwen35", "TopkEmbedAdapter"]
+__all__ = ["HFQwen35Adapter", "Qwen35Hybrid", "Qwen35Report", "PackedQwen35", "TopkEmbedAdapter"]
