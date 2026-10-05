@@ -251,11 +251,13 @@ class Qwen35Engine:
         kinds = list(getattr(cfg, "layer_types", None) or [])
         if len(kinds) < n:
             raise UnsupportedTargetError("config.layer_types is missing or shorter than num_hidden_layers")
+        self.layers: list[_Layer] = []
         try:
             # Triton launches and CUDA graphs use the *current* device, not the tensors': pin it to the
             # weights' for every launch (here, `forward_packed`, the graph runner, the stager).
             with torch.cuda.device(self.device):
-                self.layers = [self._prepare(layer, kind) for layer, kind in zip(text_model.layers[:n], kinds[:n])]
+                for layer, kind in zip(text_model.layers[:n], kinds[:n]):
+                    self.layers.append(self._prepare(layer, kind))
                 gdn = next((L for L in self.layers if L.linear), None)
                 self.gdn: GdnChoice | None = None
                 if gdn is not None:
@@ -273,8 +275,19 @@ class Qwen35Engine:
                 self.fused = fused and self._check_fusions(gdn, attn)
                 self._stager = PinnedStager(self.device)
         except BaseException:
-            unshare_rows(self.shared, rollback=True)            # leave the model exactly as we found it
+            self.release(rollback=True)                          # leave the model exactly as we found it
             raise
+
+    def release(self, *, rollback: bool = False) -> None:
+        """Drop the engine's merged weights, then give every projection its own storage back.
+
+        The merged buffers must go first: each is then freed as soon as its last slice is cloned,
+        so the transient cost is one projection group, not a second copy of every projection
+        (which does not fit beside a 27B model's weights on an 80 GB GPU)."""
+        self.layers.clear()
+        self._norms.clear()
+        self.w_final = None
+        unshare_rows(self.shared, rollback=rollback)
 
     # ------------------------------------------------------------------ weights
     def _prepare(self, layer: nn.Module, kind: str) -> _Layer:

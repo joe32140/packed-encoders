@@ -76,13 +76,16 @@ def _repeat_kv(q: Tensor, k: Tensor, v: Tensor, dim: int) -> tuple[Tensor, Tenso
 def _torch_varlen() -> tuple[Callable, Callable]:
     from torch.nn.attention.varlen import varlen_attn as f  # torch >= 2.10
 
-    has_causal = "is_causal" in inspect.signature(f).parameters
+    params = inspect.signature(f).parameters
+    # torch 2.11's public varlen_attn has no is_causal; a window with no right context is causal.
+    causal_kw = ({"is_causal": True} if "is_causal" in params
+                 else {"window_size": [-1, 0]} if "window_size" in params else None)
 
     def call(q, k, v, cu, max_len, causal):
-        if causal and not has_causal:
-            raise NotImplementedError("this torch varlen_attn has no is_causal")
+        if causal and causal_kw is None:
+            raise NotImplementedError("this torch varlen_attn has no causal mode")
         k, v = _repeat_kv(q, k, v, 1)
-        return f(q, k, v, cu, cu, max_len, max_len, **({"is_causal": causal} if has_causal else {}))
+        return f(q, k, v, cu, cu, max_len, max_len, **(causal_kw if causal else {}))
 
     return (lambda q, k, v, cu32, max_len, lengths, causal: call(q, k, v, cu32, max_len, causal),
             lambda q, k, v, static, causal: call(q, k, v, static.seg_cu32, static.seq, causal))

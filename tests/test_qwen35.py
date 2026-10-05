@@ -141,6 +141,11 @@ def test_attention_probe_selects_a_passing_kernel(causal):
     sdpa = select_attention(n_heads=8, n_kv_heads=2, head_dim=256, causal=causal, device=torch.device("cuda"),
                             order=("sdpa",))
     assert sdpa.name == "sdpa" and sdpa.max_abs_err < PROBE_TOLERANCE
+    # torch's varlen kernel serves causal models too (torch 2.11 through a causal window), so a
+    # causal model without flash-attn doesn't fall back to one SDPA call per sequence.
+    varlen = select_attention(n_heads=8, n_kv_heads=2, head_dim=256, causal=causal, device=torch.device("cuda"),
+                              order=("torch_varlen",))
+    assert varlen.name == "torch_varlen" and varlen.max_abs_err < PROBE_TOLERANCE
 
 
 # ---------------------------------------------------------------------------- engine on a tiny Qwen3.5
@@ -683,3 +688,109 @@ def test_graph_recovery_does_not_swallow_errors_or_repeat_eager_retry(topk_tiny,
         packed.forward_packed(batch)
     assert len(calls) == 2           # one failed capture and one failed eager attempt
     assert packed.state.runner is None and not packed.graph_enabled
+
+
+# ---------------------------------------------------------------------------- hf entry (stock Qwen3.5 models)
+
+
+def _stock(tiny, kind):
+    """`tiny` (a `Qwen3_5TextModel`), or a `Qwen3_5Model` subclass, vision tower included, over its
+    text config: causal by default, or bidirectional through `is_causal: false`."""
+    if kind == "text_model":
+        return copy.deepcopy(tiny)
+    from transformers.models.qwen3_5.configuration_qwen3_5 import Qwen3_5Config
+    from transformers.models.qwen3_5.modeling_qwen3_5 import Qwen3_5Model
+
+    class Stock(Qwen3_5Model):
+        pass
+
+    text = {**tiny.config.to_dict(), "use_cache": False}
+    if kind == "subclass_bidirectional":
+        text["is_causal"] = False
+    vision = dict(depth=1, hidden_size=32, intermediate_size=64, num_heads=2, out_hidden_size=256,
+                  num_position_embeddings=16)
+    torch.manual_seed(0)
+    model = Stock(Qwen3_5Config(text_config=text, vision_config=vision)).to("cuda", torch.bfloat16).eval()
+    for p in model.parameters():
+        p.data.normal_(0, 0.05) if p.dim() > 1 else None
+    return model
+
+
+@pytest.mark.parametrize("kind", ["text_model", "subclass_causal", "subclass_bidirectional"])
+def test_hf_entry_packs_stock_models_and_keeps_their_contract(tiny, kind):
+    import packed_encoders as pe
+    from packed_encoders.state import ATTR
+
+    _shims()
+    model = _stock(tiny, kind)
+    g = torch.Generator().manual_seed(5)
+    lengths = [9, 70, 1, 33]
+    S = max(lengths)
+    ids = torch.randint(0, 1024, (len(lengths), S), generator=g).cuda()
+    right = (torch.arange(S)[None] < torch.tensor(lengths)[:, None]).long().cuda()
+    left = right.flip(1)
+
+    def run(m=right, **kw):
+        with torch.no_grad():
+            return model(input_ids=ids, attention_mask=m, use_cache=False, **kw)
+
+    stock = {"right": run(right).last_hidden_state, "left": run(left).last_hidden_state}
+    params_before = {n: p.detach().clone() for n, p in model.named_parameters()}
+
+    pe.pack(model)
+    state = getattr(model, ATTR)
+    assert state.head is None and state.engine.causal == (kind != "subclass_bidirectional")
+    assert state.report.eager_cos_mean > 0.999
+
+    for side, m in (("right", right), ("left", left)):
+        out = run(m).last_hidden_state
+        real = m.bool()
+        assert out.shape == stock[side].shape and out.dtype == stock[side].dtype
+        cos = F.cosine_similarity(out[real].float(), stock[side][real].float(), dim=-1)
+        assert cos.mean().item() > 0.999 and cos.min().item() > 0.99, (side, cos.mean().item(), cos.min().item())
+        assert not out[~real].any()                            # pads come back as zeros
+    assert state.runner.num_graphs > 0
+    assert torch.equal(run(return_dict=False)[0], run().last_hidden_state)
+
+    # Calls the engine can't serve run the model's own forward, unchanged. A text batch's
+    # mm_token_type_ids (Qwen3-VL processors always return it) is not one of them.
+    calls, original = [], state.original_forward
+    state.original_forward = lambda *a, **k: calls.append(1) or original(*a, **k)
+    if kind != "text_model":
+        run(left, mm_token_type_ids=torch.zeros_like(ids))
+    assert not calls
+    holes = right.clone()
+    holes[1, 3] = 0
+    with pytest.warns(UserWarning, match="original forward"):
+        run(holes)
+    run(output_hidden_states=True)
+    with torch.enable_grad():
+        model(input_ids=ids, attention_mask=right, use_cache=False)
+    assert len(calls) == 3
+    state.original_forward = original
+
+    pe.unpack(model)
+    assert getattr(model, ATTR, None) is None
+    for n, p in model.named_parameters():
+        assert torch.equal(p.detach(), params_before[n]), n
+    assert torch.allclose(run().last_hidden_state, stock["right"], atol=1e-3)
+
+
+def test_unpack_frees_merged_weights_as_it_goes(tiny):
+    """Unpack restores independent storage one projection group at a time: a second copy of every
+    projection does not fit beside a 27B model's weights on an 80 GB GPU."""
+    import packed_encoders as pe
+
+    model = copy.deepcopy(tiny)
+    pe.pack(model, cuda_graph=False, validate=False)
+    engine = pe.get_engine(model).state.engine
+    sizes = [t.numel() * t.element_size() for L in engine.layers
+             for t in (getattr(L, n, None) for n in ("gate_up", "in_proj", "qkv")) if t is not None]
+    del engine
+    torch.cuda.synchronize()
+    before = torch.cuda.memory_allocated()
+    torch.cuda.reset_peak_memory_stats()
+    pe.unpack(model)
+    extra = torch.cuda.max_memory_allocated() - before
+    assert extra <= max(sizes) + (64 << 10), (extra, max(sizes), sum(sizes))
+    assert torch.cuda.memory_allocated() <= before + (64 << 10)
