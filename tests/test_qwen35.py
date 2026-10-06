@@ -776,6 +776,46 @@ def test_hf_entry_packs_stock_models_and_keeps_their_contract(tiny, kind):
     assert torch.allclose(run().last_hidden_state, stock["right"], atol=1e-3)
 
 
+@pytest.mark.parametrize("kind", ["text_model", "subclass_causal"])
+@pytest.mark.parametrize("option,field", [("use_cache", "past_key_values"),
+                                        ("output_hidden_states", "hidden_states"),
+                                        ("output_attentions", "attentions")])
+def test_hf_entry_preserves_config_requested_outputs(tiny, kind, option, field):
+    import packed_encoders as pe
+    from packed_encoders.state import ATTR
+
+    model = _stock(tiny, kind)
+    model.set_attn_implementation("eager")
+    text = model if kind == "text_model" else model.language_model
+    text.config.use_cache = False
+    ids = torch.arange(8, device="cuda")[None]
+    original = model.forward
+    pe.pack(model, cuda_graph=False, validate=False)
+    state = getattr(model, ATTR)
+    calls = []
+    state.original_forward = lambda *a, **kw: calls.append(kw.copy()) or original(*a, **kw)
+    # For the multimodal wrapper these defaults belong to its text backbone.
+    setattr(text.config, option, True)
+    try:
+        with torch.no_grad():
+            for kwargs in ({}, {option: True}, {option: False}, {option: None}):
+                before = original(input_ids=ids, **kwargs)
+                if not calls:
+                    with pytest.warns(UserWarning, match="original forward"):
+                        after = model(input_ids=ids, **kwargs)
+                else:
+                    after = model(input_ids=ids, **kwargs)
+                expected = getattr(before, field)
+                actual = getattr(after, field)
+                assert (actual is None) == (expected is None), kwargs
+                if expected is not None:
+                    assert calls[-1] == kwargs
+                    torch.testing.assert_close(after.last_hidden_state, before.last_hidden_state)
+            assert calls == [{}, {option: True}] + ([{option: None}] if option == "use_cache" else [])
+    finally:
+        pe.unpack(model)
+
+
 def test_unpack_frees_merged_weights_as_it_goes(tiny):
     """Unpack restores independent storage one projection group at a time: a second copy of every
     projection does not fit beside a 27B model's weights on an 80 GB GPU."""
