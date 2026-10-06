@@ -198,6 +198,16 @@ def _hf_rows(state: Qwen35State, input_ids, attention_mask, args, kwargs) -> tup
     """Per-row token counts and first real column, or None when the engine can't serve the call."""
     if args or input_ids is None or input_ids.dim() != 2 or torch.is_grad_enabled():
         return None
+    # HF resolves cache defaults on the text backbone (also for Qwen3_5Model).
+    # Its output-capture decorator uses the config only for omitted flags: an
+    # explicit None disables capture, whereas use_cache=None inherits the config.
+    cfg = state.engine.cfg
+    use_cache = kwargs.get("use_cache")
+    if use_cache is None:
+        use_cache = getattr(cfg, "use_cache", False)
+    if use_cache or any(kwargs.get(k, getattr(cfg, k, False))
+                        for k in ("output_hidden_states", "output_attentions")):
+        return None
     for k, v in kwargs.items():
         if k == "is_causal":
             if v is None or bool(v) == state.engine.causal:

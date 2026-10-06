@@ -346,7 +346,7 @@ def test_hf_binding_matches_stock_qwen35_classes_after_topk():
 def test_hf_rows_take_right_or_left_padding_and_refuse_the_rest():
     from packed_encoders.arch.qwen3_5 import _hf_rows
 
-    state = SimpleNamespace(engine=SimpleNamespace(causal=True))
+    state = SimpleNamespace(engine=SimpleNamespace(causal=True, cfg=SimpleNamespace()))
     ids = torch.zeros(3, 5, dtype=torch.long)
     mask = torch.tensor([[1, 1, 1, 0, 0], [0, 0, 1, 1, 1], [1, 1, 1, 1, 1]])
     holes, empty = mask.clone(), mask.clone()
@@ -364,6 +364,23 @@ def test_hf_rows_take_right_or_left_padding_and_refuse_the_rest():
                                 (mask, (), {"pixel_values": torch.zeros(1)})]:
             assert _hf_rows(state, ids, m, args, kwargs) is None, (m, args, kwargs)
     assert _hf_rows(state, ids, mask, (), {}) is None  # grad enabled
+
+
+@pytest.mark.parametrize("option", ["use_cache", "output_hidden_states", "output_attentions"])
+def test_hf_rows_resolve_text_config_defaults(option):
+    from packed_encoders.arch.qwen3_5 import _hf_rows
+
+    cfg = SimpleNamespace(use_cache=False, output_hidden_states=False, output_attentions=False)
+    state = SimpleNamespace(engine=SimpleNamespace(causal=True, cfg=cfg))
+    ids = torch.zeros(1, 5, dtype=torch.long)
+    with torch.no_grad():
+        assert _hf_rows(state, ids, None, (), {}) == ([5], [0])
+        setattr(cfg, option, True)  # read current config, including changes after packing
+        assert _hf_rows(state, ids, None, (), {}) is None
+        assert _hf_rows(state, ids, None, (), {option: True}) is None
+        assert _hf_rows(state, ids, None, (), {option: False}) == ([5], [0])
+        expected = None if option == "use_cache" else ([5], [0])
+        assert _hf_rows(state, ids, None, (), {option: None}) == expected
 
 
 @pytest.mark.parametrize("options", [

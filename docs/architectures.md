@@ -249,7 +249,7 @@ model = AutoModel.from_pretrained(model_id, dtype=torch.bfloat16).to("cuda")   #
 pe.pack(model, cuda_graph=False)                 # multi-row batches: see "CUDA graphs on large models"
 batch = tokenizer(texts, padding=True, return_tensors="pt").to("cuda")
 with torch.no_grad():
-    hidden = model(**batch).last_hidden_state    # pads are zeros; pool or read out as before
+    hidden = model(**batch, use_cache=False).last_hidden_state    # pads are zeros; pool or read out as before
 ```
 
 A model that wraps the backbone in its own module, such as a decision model with a readout
@@ -259,7 +259,9 @@ hidden states.
 Text batches carrying the `mm_token_type_ids` that Qwen3-VL processors always return still
 run packed. Calls the engine can't serve run the original forward unchanged: images,
 gradients, a KV cache (`past_key_values`, `use_cache=True`), explicit `position_ids` /
-`inputs_embeds`, extra outputs (`output_hidden_states`, ...) and masks with holes. The
+`inputs_embeds`, extra outputs (`output_hidden_states`, ...) and masks with holes.
+Cache and extra-output defaults on the text config are respected too. Stock Qwen3.5
+defaults to caching; pass `use_cache=False` for packed encoding. The
 engine runs in bf16; when a checkpoint ships fp32 weights, check quality against fp32 on
 your data.
 
