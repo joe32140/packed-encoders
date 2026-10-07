@@ -181,6 +181,27 @@ def _hf_hidden(model, ids):
         return model(input_ids=ids[None]).last_hidden_state[0].float()
 
 
+@torch.no_grad()
+def test_text_rope_supplies_explicit_multimodal_axes(tiny, monkeypatch):
+    from types import SimpleNamespace
+    from packed_encoders.arch.qwen3_5.engine import Qwen35Engine
+
+    pos = torch.tensor([0, 1, 17, 513], device="cuda")
+    probe = torch.empty(1, device="cuda", dtype=torch.bfloat16)
+    original = tiny.rotary_emb.forward
+    expected = original(probe, torch.stack([pos, pos, pos])[:, None])
+
+    def strict(x, position_ids):
+        assert position_ids.shape == (3, 1, len(pos))
+        return original(x, position_ids)
+
+    monkeypatch.setattr(tiny.rotary_emb, "forward", strict)
+    engine = SimpleNamespace(tm=tiny, device=pos.device, dtype=probe.dtype)
+    actual = Qwen35Engine._rope(engine, pos)
+    for got, ref in zip(actual, expected):
+        assert torch.equal(got, ref[0])
+
+
 def test_fusions_pass_their_probe_and_match_the_unfused_engine(tiny):
     from packed_encoders.arch.qwen3_5.engine import FUSION_TOLERANCE, Qwen35Engine, unshare_rows
 
@@ -999,3 +1020,75 @@ def test_sharing_across_chunk_boundaries(tiny, prefix, suffix):
         assert cos.mean() > 0.999 and cos.min() > 0.99
     finally:
         engine.release()
+
+
+def _decision_wrapper(backbone, mode=None):
+    class DecisionModel(torch.nn.Module):
+        __module__ = "autojev.model"
+
+        def __init__(self):
+            super().__init__()
+            self.backbone = backbone
+            if mode is not None:
+                self.attention_mode = mode
+
+        def forward(self, **kwargs):
+            return self.backbone(**kwargs).last_hidden_state[:, -1]
+
+    return DecisionModel().eval()
+
+
+@pytest.mark.parametrize("mode", [None, "causal", "noncausal_full_attention"])
+@torch.no_grad()
+def test_decision_wrapper_selects_execution_and_preserves_lifecycle(tiny, mode):
+    import packed_encoders as pe
+    from packed_encoders.errors import PackedEncodersError
+    from packed_encoders.arch.qwen3_5.engine import _Layout, _PrefixLayout
+    from packed_encoders.arch.qwen3_5.execution import ORDINARY, PREFIX
+
+    noncausal = mode == "noncausal_full_attention"
+    model = _decision_wrapper(_stock(tiny, "subclass_bidirectional" if noncausal else "subclass_causal"), mode)
+    ids = torch.arange(80, device="cuda").reshape(2, 40)
+    args = dict(input_ids=ids, attention_mask=torch.ones_like(ids), use_cache=False)
+    expected = model(**args)
+    original = model.backbone.forward
+    pe.pack(model)
+    packed = pe.get_engine(model)
+    assert packed.state.engine.causal is not noncausal
+    assert _Layout.execution is ORDINARY and _PrefixLayout.execution is PREFIX
+    assert "prefix" not in _Layout.__dataclass_fields__
+    assert pe.pack(model) is model
+    assert pe.get_engine(model) is packed
+    for graph in (False, True):
+        packed.graph_enabled = graph
+        got = model(**args)
+        assert F.cosine_similarity(got.float(), expected.float()).min() > .99
+    if noncausal:
+        with pytest.raises(PackedEncodersError, match="bidirectional"):
+            packed.prepare_prefix(ids[0])
+        with pytest.raises(PackedEncodersError, match="bidirectional"):
+            packed.min_shared_prefix = 64
+    pe.unpack(model)
+    assert model.backbone.forward == original
+    assert torch.equal(model(**args), expected)
+
+
+def test_decision_adapter_uses_wrapper_mode_and_keeps_validation(tiny, monkeypatch):
+    import packed_encoders as pe
+    from packed_encoders.arch.qwen3_5 import Qwen35Hybrid
+    from packed_encoders.errors import ValidationError
+    from packed_encoders.state import ATTR
+
+    model = _decision_wrapper(_stock(tiny, "subclass_causal"), "noncausal_full_attention")
+    cfg = model.backbone.language_model.config
+    before = cfg.to_dict()
+    original = model.backbone.forward
+    def reject(self, module, oracle, state, *args):
+        assert not state.engine.causal  # wrapper overrides the unchanged causal HF config
+        raise ValidationError("injected v1.1 numerical failure")
+    monkeypatch.setattr(Qwen35Hybrid, "_check_numerics", reject)
+    with pytest.raises(ValidationError, match="v1.1 numerical failure"):
+        pe.pack(model)
+    assert cfg.to_dict() == before
+    assert model.backbone.forward == original
+    assert not hasattr(model.backbone, ATTR)

@@ -16,7 +16,7 @@ from packed_encoders.errors import UnsupportedTargetError
 # Attribute chains a wrapper uses to reach the backbone, most-specific first.
 # `auto_model`: SentenceTransformers Transformer / PyLate. `model`: HF task heads
 # (ModernBertForMaskedLM, ...). `modernbert`/`bert`: occasional custom heads.
-_WRAPPER_ATTRS = ("auto_model", "model", "modernbert", "bert", "encoder")
+_WRAPPER_ATTRS = ("auto_model", "model", "modernbert", "bert", "encoder", "backbone")
 
 
 def is_modernbert_encoder(module: object) -> bool:

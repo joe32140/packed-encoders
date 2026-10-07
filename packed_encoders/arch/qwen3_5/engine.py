@@ -42,6 +42,7 @@ from fla.modules.convolution import causal_conv1d
 from fla.ops.gated_delta_rule import chunk_gated_delta_rule, fused_recurrent_gated_delta_rule
 
 from packed_encoders.arch.qwen3_5.kernels import conv_split, gated_rms_norm, qk_norm_rope, qk_norm_rope_pair, sigmoid_gate
+from packed_encoders.arch.qwen3_5.execution import ORDINARY, PREFIX
 from packed_encoders.arch.qwen3_5.sharing import SharedPlan, plan_shared_prefixes
 from packed_encoders.errors import UnsupportedTargetError, ValidationError
 from packed_encoders.pieces.hybrid import reference_delta as _gdn_reference
@@ -230,6 +231,7 @@ class _Layer:
 
 @dataclass
 class _Layout:
+    execution = ORDINARY
     shape: tuple[int, int]            # (B, S) the causal ops see: (1, T) packed, (rows, S) padded
     cos: Tensor
     sin: Tensor
@@ -240,11 +242,16 @@ class _Layout:
     lengths: list[int] | None = None
     static: PaddedStatic | None = None
     pos: Tensor | None = None         # (T,) position of each token in its sequence / row (the fused conv)
+    layer_index: int = 0
+
+
+@dataclass
+class _PrefixLayout(_Layout):
+    execution = PREFIX
     share: _Shared | None = None      # forward_shared: segments are roots then children
     prefix: object | None = None      # explicit persistent prefix handle
     prefix_write: bool = False
     prefix_meta: object | None = None
-    layer_index: int = 0
 
 
 @dataclass
@@ -543,7 +550,10 @@ class Qwen35Engine:
 
     def _rope(self, pos: Tensor) -> tuple[Tensor, Tensor]:
         probe = torch.empty(1, device=self.device, dtype=self.dtype)
-        cos, sin = self.tm.rotary_emb(probe, pos[None])
+        # Text uses the same positions on all three multimodal RoPE axes.
+        # Newer Transformers requires these axes explicitly; older versions
+        # accept them too (and expanded a 2D input internally).
+        cos, sin = self.tm.rotary_emb(probe, pos[None, None].expand(3, 1, -1))
         return cos[0], sin[0]
 
     # ------------------------------------------------------------------ layers
@@ -554,10 +564,7 @@ class Qwen35Engine:
         proj = self.ops.linear(h, L.in_proj)
         # one launch: q|k|v conv + SiLU, and b|a copied out contiguous (fla would copy each)
         q, k, v, b, a = self.ops.conv_split(proj, L.conv_w, L.conv_b, lay.pos, L.kd, L.vd, L.gate_off, L.nv, L.nv, True)
-        if lay.prefix is not None:
-            self._prefix_history(L, proj, (q, k, v), lay)
-        if lay.share is not None:
-            self._continue_conv(L, proj, (q, k, v), lay.share)
+        lay.execution.continue_conv(self, L, proj, (q, k, v), lay)
         q, k, v = q.view(B, S, L.nk, L.hk), k.view(B, S, L.nk, L.hk), v.view(B, S, L.nv, L.hv)
         if self.gdn.expand_gva:
             q, k = q.repeat_interleave(L.nv // L.nk, dim=2), k.repeat_interleave(L.nv // L.nk, dim=2)
@@ -572,10 +579,7 @@ class Qwen35Engine:
         q, k, v = (causal_conv1d(x=qkv[..., i:j], weight=w, bias=bias, activation=L.act, cu_seqlens=lay.cu,
                                  cu_seqlens_cpu=lay.cu_cpu)[0]
                    for (w, bias), i, j in zip(L.conv, L.bounds, L.bounds[1:]))
-        if lay.prefix is not None:
-            self._prefix_history(L, qkv.view(-1, qkv.shape[-1]), (q[0], k[0], v[0]), lay)
-        if lay.share is not None:
-            self._continue_conv(L, qkv.view(-1, qkv.shape[-1]), (q[0], k[0], v[0]), lay.share)
+        lay.execution.continue_conv(self, L, qkv.view(-1, qkv.shape[-1]), (q[0], k[0], v[0]), lay)
         q, k, v = q.reshape(B, S, L.nk, L.hk), k.reshape(B, S, L.nk, L.hk), v.reshape(B, S, L.nv, L.hv)
         if self.gdn.expand_gva:                       # this fla lacks grouped value heads: expand as the model does
             q, k = q.repeat_interleave(L.nv // L.nk, dim=2), k.repeat_interleave(L.nv // L.nk, dim=2)
@@ -584,60 +588,7 @@ class Qwen35Engine:
         return self.ops.linear(o.reshape(h.shape[0], -1), L.out)
 
     def _delta_rule(self, L: _Layer, q, k, v, a, b, lay: _Layout) -> Tensor:
-        if lay.prefix is not None:
-            cache = lay.prefix.layers[lay.layer_index]
-            initial = None if lay.prefix_write else cache.state.expand(len(lay.lengths), -1, -1, -1).contiguous()
-            if not lay.prefix_write:
-                return self.ops.gdn_resume(q, k, v, a, b, L.A_log, L.dt_bias, initial, lay.cu, lay.cu_cpu,
-                                           output_final_state=False)
-            out, final = self.ops.gdn_resume(q, k, v, a, b, L.A_log, L.dt_bias, initial, lay.cu, lay.cu_cpu)
-            cache.state = final.clone()
-            return out
-        sh = lay.share
-        if sh is None:
-            kernel = self.ops.gdn_recurrent if self._use_recurrent(lay) else self.ops.gdn_chunk
-            return kernel(q, k, v, a, b, L.A_log, L.dt_bias, lay.cu, lay.cu_cpu)
-        # Roots from a zero state, then every child from its root's final state.
-        R, run = sh.root_tokens, self.ops.gdn_resume
-        o_roots, state = run(q[:, :R], k[:, :R], v[:, :R], a[:, :R], b[:, :R], L.A_log, L.dt_bias, None,
-                             sh.cu_roots, sh.cu_roots_cpu)
-        o_kids = run(q[:, R:], k[:, R:], v[:, R:], a[:, R:], b[:, R:], L.A_log, L.dt_bias,
-                     state.index_select(0, sh.parent), sh.cu_kids, sh.cu_kids_cpu, output_final_state=False)
-        return torch.cat([o_roots, o_kids], 1)
-
-    def _prefix_history(self, L, x, outs, lay):
-        cache = lay.prefix.layers[lay.layer_index]
-        width, channels = L.conv_w.shape[1], L.bounds[-1]
-        if lay.prefix_write:
-            history = x[-min(width - 1, x.shape[0]):, :channels] if width > 1 else x[:0, :channels]
-            cache.history = torch.cat([x.new_zeros((max(0, width - 1 - x.shape[0]), channels)), history]).clone()
-            return
-        meta = lay.prefix_meta
-        if self._prefix_conv is not None:
-            self._prefix_conv(x, L.conv_w, L.conv_b, meta.fix_rows, meta.fix_taps, outs, history=cache.history)
-            return
-        joined = torch.cat([cache.history, x[:, :channels]])
-        taps = joined[meta.fix_taps + width - 1].float()
-        y = torch.einsum("fwc,cw->fc", taps, L.conv_w.float())
-        if L.conv_b is not None:
-            y = y + L.conv_b.float()
-        y = F.silu(y).to(x.dtype)
-        for out, i, j in zip(outs, L.bounds, L.bounds[1:]):
-            out.index_copy_(0, meta.fix_rows, y[:, i:j])
-
-    def _continue_conv(self, L: _Layer, x: Tensor, outs: tuple[Tensor, ...], sh: _Shared) -> None:
-        """The packed conv restarts at each segment; a child's first width-1 tokens redo theirs over
-        their root's last tokens (fp32, rounded once, as the conv kernels do), in place."""
-        if self._prefix_conv is not None:
-            self._prefix_conv(x, L.conv_w, L.conv_b, sh.fix_rows, sh.fix_taps, outs)
-            return
-        taps = x[:, : L.bounds[-1]].index_select(0, sh.fix_taps.view(-1)).view(*sh.fix_taps.shape, -1)
-        y = torch.einsum("fwc,cw->fc", taps.float(), L.conv_w.float())
-        if L.conv_b is not None:
-            y = y + L.conv_b.float()
-        y = F.silu(y).to(x.dtype)
-        for out, i, j in zip(outs, L.bounds, L.bounds[1:]):
-            out.index_copy_(0, sh.fix_rows, y[:, i:j])
+        return lay.execution.delta_rule(self, L, q, k, v, a, b, lay)
 
     def _attn(self, L: _Layer, h: Tensor, lay: _Layout) -> Tensor:
         N, nq, nkv, hd = h.shape[0], L.nq, L.nkv, L.hd
@@ -654,24 +605,7 @@ class Qwen35Engine:
             q, k = self.ops.qk_norm_rope_pair(out, 0, q.stride(1), nq, qw, hd, nkv, L.wqk, lay.cos, lay.sin, L.qk_eps)
         else:
             q, k = self.ops.qk_norm_rope(q, L.wq, lay.cos, lay.sin, L.qk_eps), self.ops.qk_norm_rope(k, L.wk, lay.cos, lay.sin, L.qk_eps)
-        if lay.prefix is not None and not lay.prefix_write:
-            cache, meta = lay.prefix.layers[lay.layer_index], lay.prefix_meta
-            keys = torch.cat([cache.k, k]).index_select(0, meta.kv_idx)
-            values = torch.cat([cache.v, v]).index_select(0, meta.kv_idx)
-            o = self.ops.attention_prefixed(self.attention, q, keys, values, lay.cu32, meta.cu_k32,
-                                            lay.max_len, max(meta.kv_lengths), lay.lengths, meta.kv_lengths, True)
-        elif lay.share is not None:          # each child's keys: its root's prefix, then its own
-            sh = lay.share
-            o = self.ops.attention_prefixed(self.attention, q, k.index_select(0, sh.kv_idx), v.index_select(0, sh.kv_idx),
-                                            lay.cu32, sh.cu_k32, lay.max_len, sh.max_k, lay.lengths, sh.kv_lengths,
-                                            self.causal)
-        elif lay.static is None:
-            o = self.ops.attention_packed(self.attention, q, k, v, lay.cu32, lay.max_len, lay.lengths, self.causal)
-        else:
-            o = self.ops.attention_padded(self.attention, q, k, v, lay.static, self.causal)
-        if lay.prefix is not None and lay.prefix_write:
-            cache = lay.prefix.layers[lay.layer_index]
-            cache.k, cache.v = k.clone(), v.clone()
+        o = lay.execution.attention(self, q, k, v, lay)
         if gate is None:
             return self.ops.linear(o.reshape(N, nq * hd), L.o)
         if self.fused:
@@ -738,7 +672,7 @@ class Qwen35Engine:
                 torch.cat(kv), cu_k.to(torch.int32)])
             meta = SimpleNamespace(fix_rows=rows, fix_taps=taps.view(-1, width), kv_idx=idx,
                                    cu_k32=d_ck.to(torch.int32), kv_lengths=kv_lengths)
-        lay = _Layout(shape=(1, sum(lengths)), cos=cos, sin=sin, cu=d_cu, cu_cpu=cu,
+        lay = _PrefixLayout(shape=(1, sum(lengths)), cos=cos, sin=sin, cu=d_cu, cu_cpu=cu,
                       cu32=d_cu.to(torch.int32), max_len=max(lengths), lengths=lengths, pos=d_pos,
                       prefix=prefix, prefix_write=write, prefix_meta=meta)
         return lay
@@ -768,7 +702,7 @@ class Qwen35Engine:
         share = _Shared(root_tokens=R, cu_roots=d_roots, cu_roots_cpu=cu_roots, cu_kids=d_kids, cu_kids_cpu=cu_kids,
                         parent=parent, fix_rows=fix_rows, fix_taps=fix_taps.view(plan.fix_taps.shape), kv_idx=kv_idx,
                         cu_k32=d_cu_k.to(torch.int32), max_k=max(plan.kv_lengths), kv_lengths=plan.kv_lengths)
-        lay = _Layout(shape=(1, plan.src.numel()), cos=cos, sin=sin, cu=d_cu, cu_cpu=cu, cu32=d_cu.to(torch.int32),
+        lay = _PrefixLayout(shape=(1, plan.src.numel()), cos=cos, sin=sin, cu=d_cu, cu_cpu=cu, cu32=d_cu.to(torch.int32),
                       max_len=max(plan.lengths), lengths=plan.lengths, pos=pos, share=share)
         return SimpleNamespace(src=src, out=out, layout=lay)
 

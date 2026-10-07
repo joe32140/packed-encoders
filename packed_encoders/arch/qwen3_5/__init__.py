@@ -323,6 +323,29 @@ class HFQwen35Adapter:
         binding.patch_target.forward = _make_hf_forward(binding.patch_target, packed.state)
 
 
+@dataclass(frozen=True)
+class DecisionBinding(ModelBinding):
+    causal: bool
+
+
+class DecisionModelAdapter(HFQwen35Adapter):
+    """Read autojev's attention contract without modifying its config or mask hook."""
+    name = "pplx-decider"
+
+    def bind(self, module: object) -> ModelBinding | None:
+        if not any(c.__name__ == "DecisionModel" and c.__module__ == "autojev.model"
+                   for c in type(module).__mro__):
+            return None
+        backbone = getattr(module, "backbone", None)
+        lm = _hf_text_model(backbone)
+        if lm is None:
+            return None
+        mode = getattr(module, "attention_mode", "causal")
+        if mode not in ("causal", "noncausal_full_attention"):
+            raise PackedEncodersError(f"unsupported decision attention mode: {mode!r}")
+        return DecisionBinding(self, backbone, lm, causal=mode == "causal")
+
+
 def _check_options(options):
     unknown = options.keys() - {"cuda_graph", "train_cuda_graph", "attention_backend", "validate"}
     if unknown:
@@ -338,7 +361,7 @@ def _check_options(options):
 
 class Qwen35Hybrid:
     name = "qwen3_5"
-    adapters = (TopkEmbedAdapter(), HFQwen35Adapter())
+    adapters = (DecisionModelAdapter(), TopkEmbedAdapter(), HFQwen35Adapter())
 
     def __init__(self, *, pieces=None):
         self.pieces = pieces
@@ -368,7 +391,7 @@ class Qwen35Hybrid:
         return device, fla.__version__
 
     def _validate(self, module: nn.Module, *, batches: tuple[tuple[int, ...], ...] = ((7, 129, 300, 64), (3, 21, 30)),
-                 graphs: bool = True, _engine=None, _state: Qwen35State | None = None) -> Qwen35Report:
+                 graphs: bool = True, _engine=None, _state: Qwen35State | None = None, causal: bool | None = None) -> Qwen35Report:
         """Build (or reuse) the engine and compare it with the model's own forward on random text
         rows, on this device, eager and graphed. The default batches cover both GatedDeltaNet
         kernels (eager, a batch whose rows are all <= RECURRENT_MAX_LEN tokens runs the recurrent
@@ -379,7 +402,7 @@ class Qwen35Hybrid:
         engine = _engine or (state.engine if state is not None else None)
         built_here = engine is None
         if built_here:
-            engine = self._engine(module, None)
+            engine = self._engine(module, None, causal=causal)
         try:
             report = Qwen35Report(
                 capability=torch.cuda.get_device_capability(device), torch_version=torch.__version__,
@@ -502,17 +525,17 @@ class Qwen35Hybrid:
                                           f"per-token cosine mean {mean:.6f} min {low:.5f}")
 
     # ------------------------------------------------------------------ install
-    def _engine(self, module: nn.Module, attention_backend: str | None):
+    def _engine(self, module: nn.Module, attention_backend: str | None, *, causal: bool | None = None):
         from packed_encoders.arch.qwen3_5.engine import Qwen35Engine
 
         if attention_backend not in _BACKENDS:
             raise PackedEncodersError(f"attention_backend for Qwen3.5 must be one of {sorted(map(str, _BACKENDS))}")
         lm = _topk_text_model(module)
         if lm is not None:   # topk flags causal documents on the module
-            causal = getattr(lm, "document_causal", False)
+            causal = getattr(lm, "document_causal", False) if causal is None else causal
         else:                # stock HF follows config.is_causal, as its own masks do (default causal)
             lm = _hf_text_model(module)
-            causal = getattr(lm.config, "is_causal", True)
+            causal = getattr(lm.config, "is_causal", True) if causal is None else causal
         return Qwen35Engine(lm, causal=bool(causal), attention_order=_BACKENDS[attention_backend], pieces=self.pieces)
 
     def _state(self, module: nn.Module, engine, original_forward, *, runner, graph_enabled) -> Qwen35State:
@@ -526,7 +549,7 @@ class Qwen35Hybrid:
                          stager=PinnedStager(engine.device))
 
     def validate(self, binding: ModelBinding, **kwargs) -> ValidationResult:
-        return ValidationResult(self.name, self._validate(binding.patch_target, **kwargs))
+        return ValidationResult(self.name, self._validate(binding.patch_target, causal=getattr(binding, "causal", None), **kwargs))
 
     def prepare(self, binding: ModelBinding, options):
         _check_options(options)
@@ -537,7 +560,7 @@ class Qwen35Hybrid:
 
         if _topk_text_model(module) is not None:
             _require_plain([module.head])
-        engine = self._engine(module, options.get("attention_backend"))
+        engine = self._engine(module, options.get("attention_backend"), causal=getattr(binding, "causal", None))
         try:
             graph = options.get("cuda_graph")
             use_graphs = graph is None or bool(graph)

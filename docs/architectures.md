@@ -249,7 +249,7 @@ model = AutoModel.from_pretrained(model_id, dtype=torch.bfloat16).to("cuda")   #
 pe.pack(model, cuda_graph=False)                 # multi-row batches: see "CUDA graphs on large models"
 batch = tokenizer(texts, padding=True, return_tensors="pt").to("cuda")
 with torch.no_grad():
-    hidden = model(**batch, use_cache=False).last_hidden_state    # pads are zeros; pool or read out as before
+    hidden = model(**batch).last_hidden_state    # pads are zeros; pool or read out as before
 ```
 
 A model that wraps the backbone in its own module, such as a decision model with a readout
@@ -259,9 +259,7 @@ hidden states.
 Text batches carrying the `mm_token_type_ids` that Qwen3-VL processors always return still
 run packed. Calls the engine can't serve run the original forward unchanged: images,
 gradients, a KV cache (`past_key_values`, `use_cache=True`), explicit `position_ids` /
-`inputs_embeds`, extra outputs (`output_hidden_states`, ...) and masks with holes.
-Cache and extra-output defaults on the text config are respected too. Stock Qwen3.5
-defaults to caching; pass `use_cache=False` for packed encoding. The
+`inputs_embeds`, extra outputs (`output_hidden_states`, ...) and masks with holes. The
 engine runs in bf16; when a checkpoint ships fp32 weights, check quality against fp32 on
 your data.
 
@@ -301,7 +299,7 @@ pe.get_engine(model).min_shared_prefix = 64      # opt in; 0, the default, runs 
 rows = [context + question for context in contexts for question in questions]
 batch = tokenizer(rows, padding=True, return_tensors="pt").to("cuda")
 with torch.no_grad():
-    hidden = model(**batch, use_cache=False).last_hidden_state
+    hidden = model(**batch).last_hidden_state
 ```
 
 Sharing is off by default because the shared pass runs eagerly and calls GatedDeltaNet twice
@@ -331,80 +329,8 @@ Measure a model before opting in:
 python benchmarks/qwen35_shared_prefix_bench.py --model Qwen/Qwen3.5-0.8B --out shared.json
 ```
 
-Batches with shared prefixes use a full encoder CUDA graph when graphs are enabled
-and the batch fits the configured `max_tokens` and `max_seq` limits. The graph cache
-is bounded by `max_graphs` and keyed by the exact sharing plan (lengths and mappings,
-not token values); a new geometry incurs warmup and capture. Graphs share an
-activation pool. Out-of-bounds batches stay eager. `no_cuda_graph` and
-`PACKED_ENCODERS_GRAPH=0` also disable sharing graphs, and the existing OOM recovery
-drops both ordinary and sharing graphs before retrying eagerly.
-
-With sharing on, planning reads the batch's leading tokens once per call, when at least two rows are longer than
+Batches with shared prefixes run eagerly, without graphs. With sharing on, planning reads the
+batch's leading tokens once per call, when at least two rows are longer than
 `min_shared_prefix`. `validate()` checks the shared pass against the model's own forward even
 while sharing is off and reports `shared_cos_mean` / `shared_cos_min`;
 `shared_prefix_rejected` says why a model can't share.
-
-Sharing-only probe, operation-validation, and full-model-validation failures disable
-sharing and record a reason; they do not reject an otherwise valid ordinary pack.
-All random validation and benchmark IDs stay below the regular-vocabulary bound.
-
-When CuTe DSL is installed, branch-boundary convolutions use one fused GPU kernel.
-For batches of at most 64 rows, an exact CuTe prefix comparison avoids padded
-comparison tensors and sorting. Larger batches and installations without CuTe retain
-the original planner. Prefix discovery and host planning stay outside capture;
-embedding, all encoder layers, final normalization, and reconstruction of shared
-token outputs execute in one replay. This does not make the dynamic HF adapter
-itself safe to place inside an externally captured graph.
-
-### Explicit reuse across calls (experimental)
-
-A causal packed backbone can prepare a prefix once and retain its per-layer
-GatedDeltaNet states, convolution histories and attention K/V on the GPU:
-
-```python
-packed = pe.get_engine(model)
-with torch.no_grad():
-    with packed.prepare_prefix(prefix_ids, max_bytes=64 << 20) as prefix:
-        # IDs are flat CUDA int64 tensors; lengths are positive host integers.
-        hidden = prefix.forward_suffixes(suffix_ids, suffix_lengths)
-        # hidden: [sum(suffix_lengths), hidden_size], suffix tokens only.
-        # The same prefix can serve further batches of different suffixes here.
-```
-
-The result is final-normalized backbone hidden states, before any wrapper head.
-`prefix.hidden_states` holds the prefix tokens' own final hidden states; treat all
-cached tensors as read-only. Positions of each suffix start at the prefix length.
-The caller owns the handles and may retain several, subject to its overall memory
-budget. `max_bytes` bounds the retained tensors **per handle**, excluding model
-weights and temporary forward workspace; `prefix.nbytes` reports retained bytes.
-
-Handles close explicitly, on context exit, or when the model is unpacked. In-place
-PyTorch parameter updates and parameter replacement invalidate them. Writes through
-`.data` or external pointers bypass version tracking: close handles before those
-writes or before changing model configuration. Prefix reuse requires default,
-length-independent RoPE, disabled autograd and disabled autocast.
-
-For recurring suffix lengths, explicitly capture the entire continuation:
-
-```python
-with torch.no_grad(), packed.prepare_prefix(prefix_ids) as prefix:
-    with prefix.capture_suffixes(suffix_lengths) as forward:
-        hidden = forward(suffix_ids)
-        another = forward(other_suffix_ids)  # same lengths, new token values
-```
-
-Lengths are fixed positive host integers for the lifetime of this graph; a different
-layout needs another handle. Outputs own their storage and survive subsequent
-replays. Each handle owns a graph activation pool **outside** the prefix's
-`max_bytes` budget and `nbytes` count. Close handles when finished; closing the
-prefix, unpacking, or detecting changed weights also closes its graphs. These
-explicit graphs are independent of the automatic `cuda_graph` setting. Calls to
-graph handles and the automatic graph runner must be serialized on one stream.
-The eager `forward_suffixes` method remains available for varying suffix layouts.
-
-Measure preparation cost and repeated-call latency on your workload:
-
-```bash
-python benchmarks/qwen35_prepared_prefix_bench.py --model Qwen/Qwen3.5-0.8B --out prepared.json
-python benchmarks/qwen35_prefix_profile.py --model Qwen/Qwen3.5-0.8B --out profile.json --ab-conv --ab-planner
-```
