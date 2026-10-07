@@ -91,7 +91,6 @@ def main() -> None:
     from transformers import AutoModel
 
     import packed_encoders as pe
-    from packed_encoders.arch.qwen3_5 import _validation_ids_below
 
     model = AutoModel.from_pretrained(a.model, dtype=torch.bfloat16).to("cuda").eval()
     cfg = getattr(model.config, "text_config", model.config)
@@ -99,7 +98,7 @@ def main() -> None:
            "batch": a.batch, "rows": a.rows, "padding_side": a.padding_side, "settings": []}
     g = torch.Generator().manual_seed(0)
     settings = [dict(prefix=p, suffix=s, k=k) for p, s, k in itertools.product(a.prefix, a.suffix, a.rows_per_prefix)]
-    data = [make_batches(g, _validation_ids_below(cfg), rows=a.rows, batch=a.batch, side=a.padding_side, **s) for s in settings]
+    data = [make_batches(g, cfg.vocab_size, rows=a.rows, batch=a.batch, side=a.padding_side, **s) for s in settings]
     stock = [run_pass(model, b, collect=True).cpu() for b in data]     # the model's own forward, before pack
 
     pe.pack(model)
