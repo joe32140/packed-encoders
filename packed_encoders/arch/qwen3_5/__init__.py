@@ -123,6 +123,7 @@ class Qwen35State:
     stager: PinnedStager
     report: Qwen35Report | None = None
     fallback_warned: bool = False
+    shared_runner: Any = None
 
     def set_cuda_graph(self, enabled: bool, config: PaddedGraphConfig | None = None) -> None:
         if config is not None and not isinstance(config, PaddedGraphConfig):
@@ -130,6 +131,7 @@ class Qwen35State:
                                       f"got {type(config).__name__}")
         if enabled and (self.runner is None or config is not None):
             self.runner = PaddedGraphRunner(self.engine, config)
+            self.shared_runner = None
         self.graph_enabled = enabled
 
 
@@ -143,11 +145,19 @@ def _vectors(state: Qwen35State, hidden: Tensor) -> Tensor:
 def _hidden_once(state: Qwen35State, ids: Tensor, lengths, *, graphs: bool) -> Tensor:
     state.engine.sync_norms()                 # norms trained since packing reach the graphs too
     plan = state.engine.plan_sharing(ids, lengths)
+    use_graph = (graphs and state.runner is not None and state.graph_enabled
+                 and not graphs_globally_disabled() and not torch.is_autocast_enabled("cuda"))
     if plan is not None:
+        if use_graph:
+            from packed_encoders.arch.qwen3_5.prefix_graphs import SharedGraphRunner
+            if state.shared_runner is None:
+                state.shared_runner = SharedGraphRunner(state.engine, state.runner.config)
+            hidden = state.shared_runner(ids, plan)
+            if hidden is not None:
+                return hidden
         return state.engine.forward_shared(ids, plan)
     hidden = None
-    if graphs and state.runner is not None and state.graph_enabled and not graphs_globally_disabled() \
-            and not torch.is_autocast_enabled("cuda"):
+    if use_graph:
         hidden = state.runner(ids, lengths)
     if hidden is None:
         hidden = state.engine.forward_packed(ids, lengths)
@@ -172,6 +182,7 @@ def _drop_graphs(state: Qwen35State, reason: str) -> None:
     GPU memory with graphs held, free them all and continue eager."""
     with torch.cuda.device(state.engine.device):
         state.runner, state.graph_enabled = None, False
+        state.shared_runner = None
         gc.collect()
         torch.cuda.empty_cache()
     warnings.warn(f"packed-encoders: out of GPU memory with CUDA graphs held ({reason}); dropped them and "
@@ -638,6 +649,7 @@ class PackedQwen35:
         if self._closed:
             return
         self.state.runner = None
+        self.state.shared_runner = None
         self.state.graph_enabled = False
         engine = self.state.engine
         engine.release(rollback=rollback)

@@ -893,8 +893,8 @@ def test_hf_entry_runs_each_shared_prefix_once(tiny, kind):
             return
         assert packed.min_shared_prefix == 0 and report.shared_prefix_rejected is None
         assert report.shared_cos_mean > 0.999 and len(report.pieces) == 15
-        saved, forward_shared = [], engine.forward_shared
-        engine.forward_shared = lambda ids, plan: saved.append(plan.saved_tokens) or forward_shared(ids, plan)
+        saved, prepare_shared = [], engine.prepare_shared_layout
+        engine.prepare_shared_layout = lambda plan: saved.append(plan.saved_tokens) or prepare_shared(plan)
         run()
         assert saved == []                                           # off by default
         with pytest.raises(pe.PackedEncodersError, match=">= 0"):
@@ -902,6 +902,10 @@ def test_hf_entry_runs_each_shared_prefix_once(tiny, kind):
         packed.min_shared_prefix = 64
         out = run()
         assert saved == [2 * 90 + 70]
+        assert packed.state.shared_runner.num_graphs == 1
+        replay = run()
+        torch.testing.assert_close(out, replay)
+        assert saved == [250]  # metadata reused; the second call only replays
         real = mask.bool()
         cos = F.cosine_similarity(out[real].float(), stock[real].float(), dim=-1)
         assert cos.mean().item() > 0.999 and cos.min().item() > 0.99, (cos.mean().item(), cos.min().item())

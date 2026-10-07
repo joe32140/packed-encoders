@@ -81,3 +81,62 @@ def test_prepared_prefix_rejects_invalid_inputs_and_grad(tiny):
         with pytest.raises(pe.PackedEncodersError, match="closed"):
             cache.forward_suffixes(ids, [10])
     pe.unpack(model)
+
+
+@pytest.mark.parametrize("lengths", [[1, 9, 130], [65, 257]])
+@pytest.mark.parametrize("backend", ["cute", "torch"])
+def test_suffix_graph_replays_new_tokens_and_closes(tiny, lengths, backend):
+    model = copy.deepcopy(tiny)
+    pe.pack(model, cuda_graph=False)
+    packed = pe.get_engine(model)
+    if backend == "torch":
+        packed.state.engine._prefix_conv = None
+        packed.state.engine.fused = False
+    with torch.no_grad():
+        prefix = packed.prepare_prefix(torch.arange(65, device="cuda"))
+        graph = prefix.capture_suffixes(lengths)
+        previous = None
+        for _ in range(3):
+            # More distinct layouts than FLA's four-entry metadata cache. The
+            # graph must own its chunk indices after those entries are evicted.
+            for n in range(5, 11):
+                prefix.forward_suffixes(torch.arange(n, device="cuda"), [n])
+            ids = torch.randint(0, 1024, (sum(lengths),), device="cuda")
+            expected = prefix.forward_suffixes(ids, lengths).float()
+            actual = graph(ids)
+            assert F.cosine_similarity(actual.float(), expected, dim=-1).min() > .999
+            if previous is not None:
+                assert torch.equal(previous, saved)
+            previous, saved = actual, actual.clone()
+        model.norm.weight.add_(.01)
+        with pytest.raises(pe.PackedEncodersError, match="weights changed"):
+            graph(ids)
+        with pytest.raises(pe.PackedEncodersError, match="closed"):
+            graph(ids)
+    pe.unpack(model)
+
+
+def test_suffix_graph_validation_and_prefix_lifetime(tiny):
+    model = copy.deepcopy(tiny)
+    pe.pack(model, cuda_graph=False)
+    packed = pe.get_engine(model)
+    ids = torch.arange(10, device="cuda")
+    with torch.no_grad():
+        prefix = packed.prepare_prefix(ids)
+        for lengths in ([], [0], [-1], [1.0], [True]):
+            with pytest.raises(pe.PackedEncodersError, match="positive host"):
+                prefix.capture_suffixes(lengths)
+        graph = prefix.capture_suffixes([10])
+        for bad in (ids[:9], ids.int(), ids.cpu(), ids[None]):
+            with pytest.raises(pe.PackedEncodersError):
+                graph(bad)
+        with torch.autocast("cuda", dtype=torch.float16):
+            with pytest.raises(pe.PackedEncodersError, match="autocast"):
+                graph(ids)
+    with pytest.raises(pe.PackedEncodersError, match="no_grad"):
+        graph(ids)
+    with pytest.raises(pe.PackedEncodersError, match="no_grad"):
+        prefix.capture_suffixes([10])
+    pe.unpack(model)
+    with torch.no_grad(), pytest.raises(pe.PackedEncodersError, match="closed"):
+        graph(ids)

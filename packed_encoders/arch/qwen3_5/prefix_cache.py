@@ -32,6 +32,7 @@ class PreparedPrefix:
         self.layers = []
         self.hidden_states = None
         self._closed = False
+        self._graphs = weakref.WeakSet()
         self.num_tokens = ids.numel()
         self.nbytes = 0
         if torch.is_grad_enabled():
@@ -80,8 +81,7 @@ class PreparedPrefix:
         if not lengths or any(type(n) is not int or n <= 0 for n in lengths) or sum(lengths) != ids.numel():
             raise PackedEncodersError("prefix reuse requires positive host lengths summing to the token count")
 
-    def forward_suffixes(self, input_ids, host_lengths):
-        """Run each packed suffix from the same immutable prefix; returns [sum(lengths), hidden]."""
+    def _require_valid(self):
         if self._closed:
             raise PackedEncodersError("prepared prefix is closed")
         owner = self._owner()
@@ -96,10 +96,33 @@ class PreparedPrefix:
         if self._versions != self._weight_versions(engine):
             self.close()
             raise PackedEncodersError("model weights changed; prepare the prefix again")
+        return engine
+
+    def forward_suffixes(self, input_ids, host_lengths):
+        """Run each packed suffix from the same immutable prefix; returns [sum(lengths), hidden]."""
+        engine = self._require_valid()
         self._check_ids(engine, input_ids, host_lengths)
         return engine.forward_prefix(input_ids, list(host_lengths), self)
 
+    def capture_suffixes(self, host_lengths):
+        """Capture the entire encoder for fixed suffix lengths; call the returned handle with flat IDs.
+
+        Requires no_grad/inference_mode. Each handle owns a graph activation pool,
+        outside the prefix's retained-state budget. Close it when no longer used.
+        """
+        from packed_encoders.arch.qwen3_5.prefix_graphs import SuffixGraph
+        self._require_valid()
+        lengths = list(host_lengths)
+        if not lengths or any(type(n) is not int or n <= 0 for n in lengths):
+            raise PackedEncodersError("suffix graphs require positive host lengths")
+        graph = SuffixGraph(self, lengths)
+        self._graphs.add(graph)
+        return graph
+
     def close(self):
+        for graph in self._graphs:
+            graph.close()
+        self._graphs.clear()
         self.layers.clear()
         self.hidden_states = None
         self.nbytes = 0

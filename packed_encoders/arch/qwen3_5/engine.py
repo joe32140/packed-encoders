@@ -714,59 +714,73 @@ class Qwen35Engine:
         return plan_shared_prefixes(ids.reshape(-1), lengths, min_prefix=self.min_shared_prefix,
                                     conv_width=self.conv_width)
 
+    def prepare_prefix_layout(self, lengths, prefix, *, write=False):
+        """Build host metadata and stable device buffers outside a captured forward."""
+        cu, pos = packed_layout_host(lengths)
+        d_cu, d_pos = self._stager.put([cu, pos])
+        cos, sin = self._rope(d_pos if write else d_pos + prefix.num_tokens)
+        meta = None
+        if not write:
+            width, P = self.conv_width, prefix.num_tokens
+            fix_rows, fix_taps, kv = [], [], []
+            for start, n in zip(cu[:-1].tolist(), lengths):
+                kv.extend([torch.arange(P), torch.arange(P + start, P + start + n)])
+                for i in range(min(width - 1, n)):
+                    fix_rows.append(start + i)
+                    fix_taps.append([start + i - lag if i >= lag else i - lag
+                                     for lag in range(width - 1, -1, -1)])
+            kv_lengths = [P + n for n in lengths]
+            cu_k, _ = packed_layout_host(kv_lengths)
+            rows, taps, idx, d_ck = self._stager.put([
+                torch.tensor(fix_rows, dtype=torch.long), torch.tensor(fix_taps, dtype=torch.long).view(-1, width),
+                torch.cat(kv), cu_k.to(torch.int32)])
+            meta = SimpleNamespace(fix_rows=rows, fix_taps=taps.view(-1, width), kv_idx=idx,
+                                   cu_k32=d_ck.to(torch.int32), kv_lengths=kv_lengths)
+        lay = _Layout(shape=(1, sum(lengths)), cos=cos, sin=sin, cu=d_cu, cu_cpu=cu,
+                      cu32=d_cu.to(torch.int32), max_len=max(lengths), lengths=lengths, pos=d_pos,
+                      prefix=prefix, prefix_write=write, prefix_meta=meta)
+        return lay
+
+    def prefix_core(self, ids, lay):
+        with fla_tensor_cache():
+            return self._trunk(F.embedding(ids, self.embed), lay)
+
     @torch.no_grad()
     def forward_prefix(self, ids, lengths, prefix, *, write=False):
         """Build a persistent prefix or run packed continuations from its layer states."""
         with torch.cuda.device(self.device):
             self.sync_norms()
-            cu, pos = packed_layout_host(lengths)
-            d_cu, d_pos = self._stager.put([cu, pos])
-            x = F.embedding(ids, self.embed)
-            cos, sin = self._rope(d_pos if write else d_pos + prefix.num_tokens)
-            meta = None
-            if not write:
-                width, P = self.conv_width, prefix.num_tokens
-                fix_rows, fix_taps, kv = [], [], []
-                for start, n in zip(cu[:-1].tolist(), lengths):
-                    kv.extend([torch.arange(P), torch.arange(P + start, P + start + n)])
-                    for i in range(min(width - 1, n)):
-                        fix_rows.append(start + i)
-                        fix_taps.append([start + i - lag if i >= lag else i - lag
-                                         for lag in range(width - 1, -1, -1)])
-                kv_lengths = [P + n for n in lengths]
-                cu_k, _ = packed_layout_host(kv_lengths)
-                rows, taps, idx, d_ck = self._stager.put([
-                    torch.tensor(fix_rows, dtype=torch.long), torch.tensor(fix_taps, dtype=torch.long).view(-1, width),
-                    torch.cat(kv), cu_k.to(torch.int32)])
-                meta = SimpleNamespace(fix_rows=rows, fix_taps=taps.view(-1, width), kv_idx=idx,
-                                       cu_k32=d_ck.to(torch.int32), kv_lengths=kv_lengths)
-            lay = _Layout(shape=(1, ids.numel()), cos=cos, sin=sin, cu=d_cu, cu_cpu=cu,
-                          cu32=d_cu.to(torch.int32), max_len=max(lengths), lengths=lengths, pos=d_pos,
-                          prefix=prefix, prefix_write=write, prefix_meta=meta)
-            with fla_tensor_cache():
-                return self._trunk(x, lay)
+            lay = self.prepare_prefix_layout(lengths, prefix, write=write)
+            return self.prefix_core(ids, lay)
+
+    def prepare_shared_layout(self, plan):
+        """Stage one forest outside capture; host lengths determine kernel launch geometry."""
+        n, R = plan.n_roots, plan.root_tokens
+        cu, _ = packed_layout_host(plan.lengths)
+        cu_k, _ = packed_layout_host(plan.kv_lengths)
+        cu_roots, cu_kids = cu[: n + 1], cu[n:] - R
+        src, out, rope, pos, d_cu, d_cu_k, d_roots, d_kids, parent, fix_rows, fix_taps, kv_idx = self._stager.put(
+            [plan.src, plan.out, plan.rope_pos, plan.conv_pos, cu, cu_k, cu_roots, cu_kids, plan.parent,
+             plan.fix_rows, plan.fix_taps, plan.kv_idx])
+        cos, sin = self._rope(rope)
+        share = _Shared(root_tokens=R, cu_roots=d_roots, cu_roots_cpu=cu_roots, cu_kids=d_kids, cu_kids_cpu=cu_kids,
+                        parent=parent, fix_rows=fix_rows, fix_taps=fix_taps.view(plan.fix_taps.shape), kv_idx=kv_idx,
+                        cu_k32=d_cu_k.to(torch.int32), max_k=max(plan.kv_lengths), kv_lengths=plan.kv_lengths)
+        lay = _Layout(shape=(1, plan.src.numel()), cos=cos, sin=sin, cu=d_cu, cu_cpu=cu, cu32=d_cu.to(torch.int32),
+                      max_len=max(plan.lengths), lengths=plan.lengths, pos=pos, share=share)
+        return SimpleNamespace(src=src, out=out, layout=lay)
+
+    def shared_core(self, ids, static):
+        with fla_tensor_cache():
+            x = F.embedding(ids.reshape(-1).index_select(0, static.src), self.embed)
+            return self._trunk(x, static.layout).index_select(0, static.out)
 
     @torch.no_grad()
     def forward_shared(self, ids: Tensor, plan: SharedPlan) -> Tensor:
-        """`forward_packed` (same arguments' result, same layout) with each shared prefix run once."""
+        """Run each shared prefix once, returning hidden states in the caller's layout."""
         with torch.cuda.device(self.device):
             self.sync_norms()
-            n, R = plan.n_roots, plan.root_tokens
-            cu, _ = packed_layout_host(plan.lengths)
-            cu_k, _ = packed_layout_host(plan.kv_lengths)
-            cu_roots, cu_kids = cu[: n + 1], cu[n:] - R
-            src, out, rope, pos, d_cu, d_cu_k, d_roots, d_kids, parent, fix_rows, fix_taps, kv_idx = self._stager.put(
-                [plan.src, plan.out, plan.rope_pos, plan.conv_pos, cu, cu_k, cu_roots, cu_kids, plan.parent,
-                 plan.fix_rows, plan.fix_taps, plan.kv_idx])
-            x = F.embedding(ids.reshape(-1).index_select(0, src), self.embed)
-            cos, sin = self._rope(rope)
-            share = _Shared(root_tokens=R, cu_roots=d_roots, cu_roots_cpu=cu_roots, cu_kids=d_kids, cu_kids_cpu=cu_kids,
-                            parent=parent, fix_rows=fix_rows, fix_taps=fix_taps.view(plan.fix_taps.shape), kv_idx=kv_idx,
-                            cu_k32=d_cu_k.to(torch.int32), max_k=max(plan.kv_lengths), kv_lengths=plan.kv_lengths)
-            lay = _Layout(shape=(1, x.shape[0]), cos=cos, sin=sin, cu=d_cu, cu_cpu=cu, cu32=d_cu.to(torch.int32),
-                          max_len=max(plan.lengths), lengths=plan.lengths, pos=pos, share=share)
-            with fla_tensor_cache():
-                return self._trunk(x, lay).index_select(0, out)
+            return self.shared_core(ids, self.prepare_shared_layout(plan))
 
     def _use_recurrent(self, lay: _Layout) -> bool:
         return lay.static is None and lay.max_len <= self.gdn.recurrent_max_len     # eager only; see RECURRENT_MAX_LEN
