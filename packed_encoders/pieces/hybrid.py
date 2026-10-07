@@ -157,8 +157,8 @@ def default_numerical():
 
 GDN = Contract("gated_delta_rule", "q,k [B,S,H,K], v [B,S,H,V], raw a,b [B,S,H], A_log,dt_bias [H] -> [B,S,H,V]",
                "causal zero-state recurrence; in-kernel L2 Q/K norm, softplus decay and sigmoid beta; optional sequence boundaries", autograd=False)
-GDN_RESUME = Contract("gated_delta_rule_resume", "GDN inputs [1,T,...], initial state [N,H,K,V] fp32 or None, boundaries -> [1,T,H,V], final states [N,H,K,V] fp32",
-                      "the same recurrence, sequence i continuing from initial state i (zero if None)", autograd=False)
+GDN_RESUME = Contract("gated_delta_rule_resume", "GDN inputs [1,T,...], initial state [N,H,K,V] fp32 or None, boundaries, output_final_state=True -> (output [1,T,H,V], final states [N,H,K,V] fp32); False -> output only",
+                      "the same recurrence, sequence i continuing from initial state i (zero if None); terminal calls omit final-state allocation and writes", autograd=False)
 
 
 def reference_delta(q, k, v, g, beta, lengths, initial_state=None, final_state=False):
@@ -192,8 +192,8 @@ def ref_gdn(q, k, v, a, b, a_log, dt_bias, cu=None, cu_cpu=None, initial_state=N
     return out.view_as(v).to(v.dtype)
 
 
-def ref_gdn_resume(q, k, v, a, b, a_log, dt_bias, initial_state, cu, cu_cpu):
-    return ref_gdn(q, k, v, a, b, a_log, dt_bias, cu, cu_cpu, initial_state, final_state=True)
+def ref_gdn_resume(q, k, v, a, b, a_log, dt_bias, initial_state, cu, cu_cpu, *, output_final_state=True):
+    return ref_gdn(q, k, v, a, b, a_log, dt_bias, cu, cu_cpu, initial_state, final_state=output_final_state)
 
 
 def check_gdn(q, k, v, a, b, a_log, dt_bias, cu=None, cu_cpu=None):
@@ -203,8 +203,9 @@ def check_gdn(q, k, v, a, b, a_log, dt_bias, cu=None, cu_cpu=None):
     _require((cu is None) == (cu_cpu is None), "GDN validation requires paired device/host boundaries")
 
 
-def check_gdn_resume(q, k, v, a, b, a_log, dt_bias, initial_state, cu, cu_cpu):
+def check_gdn_resume(q, k, v, a, b, a_log, dt_bias, initial_state, cu, cu_cpu, *, output_final_state=True):
     check_gdn(q, k, v, a, b, a_log, dt_bias, cu, cu_cpu)
+    _require(type(output_final_state) is bool, "output_final_state must be a bool")
     _require(cu is not None and q.shape[0] == 1, "resuming the gated delta rule requires packed sequence boundaries")
     _require(initial_state is None or (initial_state.dtype == torch.float32 and initial_state.shape ==
              (cu_cpu.numel() - 1, v.shape[2], q.shape[3], v.shape[3])), "initial state must be fp32 [N,H,K,V]")
@@ -212,11 +213,12 @@ def check_gdn_resume(q, k, v, a, b, a_log, dt_bias, initial_state, cu, cu_cpu):
 
 def gdn_resume_piece():
     from fla.ops.gated_delta_rule import chunk_gated_delta_rule
-    def execute(q, k, v, a, b, a_log, dt_bias, initial_state, cu, cu_cpu):
-        return chunk_gated_delta_rule(q, k, v, g=a, beta=b, use_qk_l2norm_in_kernel=True, use_gate_in_kernel=True,
+    def execute(q, k, v, a, b, a_log, dt_bias, initial_state, cu, cu_cpu, *, output_final_state=True):
+        result = chunk_gated_delta_rule(q, k, v, g=a, beta=b, use_qk_l2norm_in_kernel=True, use_gate_in_kernel=True,
                                       A_log=a_log, dt_bias=dt_bias, use_beta_sigmoid_in_kernel=True,
-                                      initial_state=initial_state, output_final_state=True,
+                                      initial_state=initial_state, output_final_state=output_final_state,
                                       cu_seqlens=cu, cu_seqlens_cpu=cu_cpu)
+        return result if output_final_state else result[0]
     return Piece("fla-chunk-gdn-resume", GDN_RESUME, execute, ref_gdn_resume, check_gdn_resume, rtol=0.03, atol=0.03)
 
 
