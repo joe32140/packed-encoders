@@ -1,7 +1,9 @@
-"""Qwen3.5 (topk-embed-v1) under packed-encoders on Modal GPUs: GPU tests + benchmark, per GPU x stack.
+"""Qwen3.5 under packed-encoders on Modal GPUs: GPU tests + benchmarks, per GPU x stack.
 
     PE_STACK=pinned modal run benchmarks/scripts/modal_qwen35.py --data sample.json --gpus L40S,A100-40GB,H100 \\
         --models xsmall,small --out results/
+    PE_STACK=fa2 modal run benchmarks/scripts/modal_qwen35.py --gpus H100 --models "" --tests none \\
+        --shared Qwen/Qwen3.5-0.8B --out results/
 
 Stacks (the stack is one image; every requested GPU runs concurrently):
   pinned  the `qwen3_5` extra: torch 2.11, transformers 5.9.0 — attention via torch's varlen kernel
@@ -58,7 +60,8 @@ LADDER = {"xsmall": "topk:topk-io/topk-embed-v1-xsmall", "small": "topk:topk-io/
 
 @app.function(gpu="L40S", timeout=4 * 3600, volumes={"/cache": cache})
 def run(models: list[str], data: str, bench_args: str, tests: str, ladder: list[str] | None = None,
-        probe: list[str] | None = None, ladder_args: str = "") -> dict:
+        probe: list[str] | None = None, ladder_args: str = "", shared: list[str] | None = None,
+        shared_args: str = "") -> dict:
     import shlex
     import subprocess
 
@@ -101,23 +104,33 @@ def run(models: list[str], data: str, bench_args: str, tests: str, ladder: list[
         print("$", " ".join(cmd), flush=True)
         p = subprocess.run(cmd, cwd="/root/pe")
         out["ladder"][spec] = json.loads(f.read_text()) if f.exists() else {"error": p.returncode}
+    out["shared"] = {}
+    for model in shared or []:
+        f = Path(f"/tmp/shared_{model.replace('/', '_')}.json")
+        cmd = ["python", "-u", "/root/pe/benchmarks/qwen35_shared_prefix_bench.py", "--model", model, "--out", str(f),
+               *shlex.split(shared_args)]
+        print("$", " ".join(cmd), flush=True)
+        p = subprocess.run(cmd, cwd="/root/pe")
+        out["shared"][model] = json.loads(f.read_text()) if f.exists() else {"error": p.returncode}
     cache.commit()
     return out
 
 
 @app.local_entrypoint()
-def main(data: str, gpus: str = "L40S", models: str = "xsmall", out: str = "qwen35_results", bench_args: str = "",
-         tests: str = "qwen35", ladder: str = "", probe: str = "", ladder_args: str = ""):
+def main(data: str = "", gpus: str = "L40S", models: str = "xsmall", out: str = "qwen35_results", bench_args: str = "",
+         tests: str = "qwen35", ladder: str = "", probe: str = "", ladder_args: str = "", shared: str = "",
+         shared_args: str = ""):
     """tests: all (the whole suite, ModernBERT GPU tests included) | none | comma list of test file stems
     (qwen35,varlen -> tests/test_qwen35.py tests/test_varlen.py).
     models: topk sizes for the forward/encode bench ("" to skip). ladder: comma list of practical-ladder
-    models (xsmall, small, gte, or family:model_id)."""
-    payload = Path(data).read_text()
+    models (xsmall, small, gte, or family:model_id). shared: comma list of causal Qwen3.5 model ids for
+    the shared-prefix bench (needs no --data)."""
+    payload = Path(data).read_text() if data else "{}"
     Path(out).mkdir(parents=True, exist_ok=True)
     specs = [x for x in ladder.split(",") if x]
     probes = [x for x in probe.split(",") if x]
     calls = {g: run.with_options(gpu=g).spawn([m for m in models.split(",") if m], payload, bench_args, tests, specs,
-                                              probes, ladder_args)
+                                              probes, ladder_args, [m for m in shared.split(",") if m], shared_args)
              for g in gpus.split(",")}
     for g, call in calls.items():
         try:

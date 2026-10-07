@@ -17,14 +17,18 @@ Same math as the model, fewer and fatter kernels:
   gates), the gated RMSNorm reading z in place, q and k norm + RoPE in one launch, and the
   attention output gate in one kernel.
 
-Two entry points share the layer code: `forward_packed` (eager, padding-free, any batch)
-and `padded_core` (the CUDA-graph region, right-padded `(rows, S)`; exact because the
-mixers are causal and attention sees `[real | pad]` segments — see runtime.graphs).
+Three entry points share the layer code: `forward_packed` (eager, padding-free, any batch),
+`padded_core` (the CUDA-graph region, right-padded `(rows, S)`; exact because the
+mixers are causal and attention sees `[real | pad]` segments — see runtime.graphs), and
+`forward_shared` (eager, causal, opt in: rows that start with the same tokens run that prefix
+once — see sharing).
 """
 
 from __future__ import annotations
 
 import contextlib
+import weakref
+from types import SimpleNamespace
 from collections.abc import Sequence
 from dataclasses import dataclass
 
@@ -38,6 +42,7 @@ from fla.modules.convolution import causal_conv1d
 from fla.ops.gated_delta_rule import chunk_gated_delta_rule, fused_recurrent_gated_delta_rule
 
 from packed_encoders.arch.qwen3_5.kernels import conv_split, gated_rms_norm, qk_norm_rope, qk_norm_rope_pair, sigmoid_gate
+from packed_encoders.arch.qwen3_5.sharing import SharedPlan, plan_shared_prefixes
 from packed_encoders.errors import UnsupportedTargetError, ValidationError
 from packed_encoders.pieces.hybrid import reference_delta as _gdn_reference
 from packed_encoders.runtime.attention import AttentionChoice, select_attention
@@ -118,6 +123,15 @@ FUSION_TOLERANCE = 2e-2        # max |fused - unfused op|, relative to the unfus
 #   has more GPU work per launch, so the recurrent kernel's slower GPU time shows; end to end it is a wash).
 # (A pre-fusion L40S sweep had <=32 winning graphed batch 8; it no longer does.) 0: chunked everywhere.
 RECURRENT_MAX_LEN = 64
+# Shared prefixes are opt in: `min_shared_prefix` starts at 0 (off); a caller sets how many leading tokens rows
+# must agree on to run their common prefix once. The shared pass is eager and runs GatedDeltaNet twice per layer
+# (prefixes, then continuations), so it pays only where a forward is compute bound. Measured, batch 8, shared
+# at 64 tokens vs the faster of graphs and eager, rows per prefix 2 / 4 / 8:
+#   27B backbone (pplx-decider-v1-27b), H100, 71- to 3,096-token prefixes, short questions: 1.8x / 3.0x / 4.2x
+#   Qwen3.5-0.8B, L40S: 1,024-token prefixes + up to 1,024 own tokens 1.31x / 1.35x / 1.37x; shorter prefixes
+#   or rows 0.12x-0.99x (the shared pass has a floor of ~85 ms per batch, however few tokens it computes).
+# benchmarks/qwen35_shared_prefix_bench.py measures a model. validate() checks the shared pass at this threshold.
+SHARED_PREFIX_MIN = 64
 
 
 def _chunk(q, k, v, a, b, L, cu=None, cu_cpu=None):
@@ -226,6 +240,29 @@ class _Layout:
     lengths: list[int] | None = None
     static: PaddedStatic | None = None
     pos: Tensor | None = None         # (T,) position of each token in its sequence / row (the fused conv)
+    share: _Shared | None = None      # forward_shared: segments are roots then children
+    prefix: object | None = None      # explicit persistent prefix handle
+    prefix_write: bool = False
+    prefix_meta: object | None = None
+    layer_index: int = 0
+
+
+@dataclass
+class _Shared:
+    """Device side of a SharedPlan. The roots region is tokens [0, root_tokens)."""
+
+    root_tokens: int
+    cu_roots: Tensor
+    cu_roots_cpu: Tensor
+    cu_kids: Tensor                   # children's boundaries, relative to root_tokens
+    cu_kids_cpu: Tensor
+    parent: Tensor
+    fix_rows: Tensor
+    fix_taps: Tensor
+    kv_idx: Tensor
+    cu_k32: Tensor
+    max_k: int
+    kv_lengths: list[int]
 
 
 class Qwen35Engine:
@@ -252,6 +289,7 @@ class Qwen35Engine:
         if len(kinds) < n:
             raise UnsupportedTargetError("config.layer_types is missing or shorter than num_hidden_layers")
         self.layers: list[_Layer] = []
+        self._prefix_caches = weakref.WeakSet()
         try:
             # Triton launches and CUDA graphs use the *current* device, not the tensors': pin it to the
             # weights' for every launch (here, `forward_packed`, the graph runner, the stager).
@@ -273,6 +311,19 @@ class Qwen35Engine:
                 self.fusion_errors: dict[str, float] = {}
                 self.fusion_rejected: dict[str, str] = {}
                 self.fused = fused and self._check_fusions(gdn, attn)
+                self.conv_width = gdn.conv_w.shape[1] if gdn is not None else 1
+                self.share_err: float | None = None
+                try:
+                    self.share_rejected = self._check_sharing(gdn)     # None: forward_shared can run here
+                except Exception as exc:
+                    self.share_rejected = f"shared-prefix probe failed: {type(exc).__name__}: {str(exc)[:200]}"
+                self.min_shared_prefix = 0                          # off until the caller opts in
+                # Optional CuTe acceleration; the Qwen-only environment may omit Cutlass.
+                try:
+                    from packed_encoders._kernels.prefix_conv import continue_conv
+                    self._prefix_conv = continue_conv
+                except ImportError:
+                    self._prefix_conv = None
                 self._stager = PinnedStager(self.device)
         except BaseException:
             self.release(rollback=True)                          # leave the model exactly as we found it
@@ -284,6 +335,9 @@ class Qwen35Engine:
         The merged buffers must go first: each is then freed as soon as its last slice is cloned,
         so the transient cost is one projection group, not a second copy of every projection
         (which does not fit beside a 27B model's weights on an 80 GB GPU)."""
+        for prefix in self._prefix_caches:
+            prefix.close()
+        self._prefix_caches.clear()
         self.layers.clear()
         self._norms.clear()
         self.w_final = None
@@ -438,6 +492,55 @@ class Qwen35Engine:
                 self.fusion_rejected[name] = f"relative error {err:.2e} >= {FUSION_TOLERANCE}"
         return not self.fusion_rejected
 
+    def _check_sharing(self, G: _Layer | None) -> str | None:
+        """Why `forward_shared` can't run here, or None. Besides causality and an end-aligned
+        attention, the GatedDeltaNet must resume exactly: roots run from a zero state, children
+        from their root's final state, against the fp32 recurrence over the whole rows."""
+        if not self.causal:
+            return "bidirectional: a prefix's states depend on what follows"
+        if self.attention is not None and self.attention.prefixed is None:
+            return "no prefixed attention kernel"
+        if G is None:
+            return None
+        if G.act not in ("silu", "swish"):
+            return f"conv activation {G.act!r}"
+        gen = torch.Generator(device=self.device).manual_seed(0)
+        roots, kids, parent = [70, 33], [9, 1, 20], [0, 0, 1]
+        rows = [roots[p] + n for p, n in zip(parent, kids)]
+        rep = G.nv // G.nk
+
+        def rand(*shape):
+            return torch.randn(*shape, device=self.device, generator=gen).to(self.dtype)
+
+        full = [(rand(n, G.nk, G.hk), rand(n, G.nk, G.hk), rand(n, G.nv, G.hv), rand(n, G.nv), rand(n, G.nv))
+                for n in roots]                                # root r's tokens, then each child's own
+        tail = [(rand(n, G.nk, G.hk), rand(n, G.nk, G.hk), rand(n, G.nv, G.hv), rand(n, G.nv), rand(n, G.nv))
+                for n in kids]
+        row = [[torch.cat([x, y]) for x, y in zip(full[p], t)] for p, t in zip(parent, tail)]
+        with torch.no_grad():
+            q, k, v, a, b = (torch.cat(xs) for xs in zip(*row))
+            decay = -G.A_log.float().exp() * F.softplus(a.float() + G.dt_bias.float())
+            ref = _gdn_reference(q.repeat_interleave(rep, 1), k.repeat_interleave(rep, 1), v, decay,
+                                 torch.sigmoid(b.float()), rows).split(rows)
+            want = torch.cat([ref[parent.index(r)][:n] for r, n in enumerate(roots)] +
+                             [ref[i][roots[p]:] for i, p in enumerate(parent)])
+
+            def run(parts, lengths, state):
+                q, k, v, a, b = (torch.cat(xs)[None] for xs in zip(*parts))
+                if self.gdn.expand_gva:
+                    q, k = q.repeat_interleave(rep, 2), k.repeat_interleave(rep, 2)
+                cu_cpu, _ = packed_layout_host(lengths)
+                return self.ops.gdn_resume(q, k, v, a, b, G.A_log, G.dt_bias, state, cu_cpu.to(self.device), cu_cpu)
+
+            try:
+                o_roots, final = run(full, roots, None)
+                o_kids, _ = run(tail, kids, final[parent])
+            except Exception as exc:  # noqa: BLE001
+                return f"resuming the GatedDeltaNet failed: {type(exc).__name__}: {str(exc)[:160]}"
+            err = (torch.cat([o_roots[0], o_kids[0]]).float() - want).abs().max().item() / want.abs().max().item()
+        self.share_err = err
+        return None if err < GDN_PROBE_TOLERANCE else f"resumed GatedDeltaNet relative error {err:.2e}"
+
     def _rope(self, pos: Tensor) -> tuple[Tensor, Tensor]:
         probe = torch.empty(1, device=self.device, dtype=self.dtype)
         cos, sin = self.tm.rotary_emb(probe, pos[None])
@@ -451,11 +554,14 @@ class Qwen35Engine:
         proj = self.ops.linear(h, L.in_proj)
         # one launch: q|k|v conv + SiLU, and b|a copied out contiguous (fla would copy each)
         q, k, v, b, a = self.ops.conv_split(proj, L.conv_w, L.conv_b, lay.pos, L.kd, L.vd, L.gate_off, L.nv, L.nv, True)
+        if lay.prefix is not None:
+            self._prefix_history(L, proj, (q, k, v), lay)
+        if lay.share is not None:
+            self._continue_conv(L, proj, (q, k, v), lay.share)
         q, k, v = q.view(B, S, L.nk, L.hk), k.view(B, S, L.nk, L.hk), v.view(B, S, L.nv, L.hv)
         if self.gdn.expand_gva:
             q, k = q.repeat_interleave(L.nv // L.nk, dim=2), k.repeat_interleave(L.nv // L.nk, dim=2)
-        kernel = self.ops.gdn_recurrent if self._use_recurrent(lay) else self.ops.gdn_chunk
-        o = kernel(q, k, v, a.view(B, S, L.nv), b.view(B, S, L.nv), L.A_log, L.dt_bias, lay.cu, lay.cu_cpu)
+        o = self._delta_rule(L, q, k, v, a.view(B, S, L.nv), b.view(B, S, L.nv), lay)
         z = proj[:, L.bounds[-1]: L.bounds[-1] + L.nv * L.hv].view(-1, L.nv, L.hv)     # read in place
         return self.ops.linear(self.ops.gated_rms_norm(o.view(-1, L.nv, L.hv), z, L.gn_w, L.gn_eps), L.out)
 
@@ -466,13 +572,70 @@ class Qwen35Engine:
         q, k, v = (causal_conv1d(x=qkv[..., i:j], weight=w, bias=bias, activation=L.act, cu_seqlens=lay.cu,
                                  cu_seqlens_cpu=lay.cu_cpu)[0]
                    for (w, bias), i, j in zip(L.conv, L.bounds, L.bounds[1:]))
+        if lay.prefix is not None:
+            self._prefix_history(L, qkv.view(-1, qkv.shape[-1]), (q[0], k[0], v[0]), lay)
+        if lay.share is not None:
+            self._continue_conv(L, qkv.view(-1, qkv.shape[-1]), (q[0], k[0], v[0]), lay.share)
         q, k, v = q.reshape(B, S, L.nk, L.hk), k.reshape(B, S, L.nk, L.hk), v.reshape(B, S, L.nv, L.hv)
         if self.gdn.expand_gva:                       # this fla lacks grouped value heads: expand as the model does
             q, k = q.repeat_interleave(L.nv // L.nk, dim=2), k.repeat_interleave(L.nv // L.nk, dim=2)
-        kernel = self.ops.gdn_recurrent if self._use_recurrent(lay) else self.ops.gdn_chunk
-        o = kernel(q, k, v, a.reshape(B, S, L.nv), b.reshape(B, S, L.nv), L.A_log, L.dt_bias, lay.cu, lay.cu_cpu)
+        o = self._delta_rule(L, q, k, v, a.reshape(B, S, L.nv), b.reshape(B, S, L.nv), lay)
         o = L.gnorm(o.reshape(-1, L.hv), z.reshape(-1, L.hv))
         return self.ops.linear(o.reshape(h.shape[0], -1), L.out)
+
+    def _delta_rule(self, L: _Layer, q, k, v, a, b, lay: _Layout) -> Tensor:
+        if lay.prefix is not None:
+            cache = lay.prefix.layers[lay.layer_index]
+            initial = None if lay.prefix_write else cache.state.expand(len(lay.lengths), -1, -1, -1).contiguous()
+            out, final = self.ops.gdn_resume(q, k, v, a, b, L.A_log, L.dt_bias, initial, lay.cu, lay.cu_cpu)
+            if lay.prefix_write:
+                cache.state = final.clone()
+            return out
+        sh = lay.share
+        if sh is None:
+            kernel = self.ops.gdn_recurrent if self._use_recurrent(lay) else self.ops.gdn_chunk
+            return kernel(q, k, v, a, b, L.A_log, L.dt_bias, lay.cu, lay.cu_cpu)
+        # Roots from a zero state, then every child from its root's final state.
+        R, run = sh.root_tokens, self.ops.gdn_resume
+        o_roots, state = run(q[:, :R], k[:, :R], v[:, :R], a[:, :R], b[:, :R], L.A_log, L.dt_bias, None,
+                             sh.cu_roots, sh.cu_roots_cpu)
+        o_kids, _ = run(q[:, R:], k[:, R:], v[:, R:], a[:, R:], b[:, R:], L.A_log, L.dt_bias,
+                        state.index_select(0, sh.parent), sh.cu_kids, sh.cu_kids_cpu)
+        return torch.cat([o_roots, o_kids], 1)
+
+    def _prefix_history(self, L, x, outs, lay):
+        cache = lay.prefix.layers[lay.layer_index]
+        width, channels = L.conv_w.shape[1], L.bounds[-1]
+        if lay.prefix_write:
+            history = x[-min(width - 1, x.shape[0]):, :channels] if width > 1 else x[:0, :channels]
+            cache.history = torch.cat([x.new_zeros((max(0, width - 1 - x.shape[0]), channels)), history]).clone()
+            return
+        meta = lay.prefix_meta
+        if self._prefix_conv is not None:
+            self._prefix_conv(x, L.conv_w, L.conv_b, meta.fix_rows, meta.fix_taps, outs, history=cache.history)
+            return
+        joined = torch.cat([cache.history, x[:, :channels]])
+        taps = joined[meta.fix_taps + width - 1].float()
+        y = torch.einsum("fwc,cw->fc", taps, L.conv_w.float())
+        if L.conv_b is not None:
+            y = y + L.conv_b.float()
+        y = F.silu(y).to(x.dtype)
+        for out, i, j in zip(outs, L.bounds, L.bounds[1:]):
+            out.index_copy_(0, meta.fix_rows, y[:, i:j])
+
+    def _continue_conv(self, L: _Layer, x: Tensor, outs: tuple[Tensor, ...], sh: _Shared) -> None:
+        """The packed conv restarts at each segment; a child's first width-1 tokens redo theirs over
+        their root's last tokens (fp32, rounded once, as the conv kernels do), in place."""
+        if self._prefix_conv is not None:
+            self._prefix_conv(x, L.conv_w, L.conv_b, sh.fix_rows, sh.fix_taps, outs)
+            return
+        taps = x[:, : L.bounds[-1]].index_select(0, sh.fix_taps.view(-1)).view(*sh.fix_taps.shape, -1)
+        y = torch.einsum("fwc,cw->fc", taps.float(), L.conv_w.float())
+        if L.conv_b is not None:
+            y = y + L.conv_b.float()
+        y = F.silu(y).to(x.dtype)
+        for out, i, j in zip(outs, L.bounds, L.bounds[1:]):
+            out.index_copy_(0, sh.fix_rows, y[:, i:j])
 
     def _attn(self, L: _Layer, h: Tensor, lay: _Layout) -> Tensor:
         N, nq, nkv, hd = h.shape[0], L.nq, L.nkv, L.hd
@@ -489,10 +652,24 @@ class Qwen35Engine:
             q, k = self.ops.qk_norm_rope_pair(out, 0, q.stride(1), nq, qw, hd, nkv, L.wqk, lay.cos, lay.sin, L.qk_eps)
         else:
             q, k = self.ops.qk_norm_rope(q, L.wq, lay.cos, lay.sin, L.qk_eps), self.ops.qk_norm_rope(k, L.wk, lay.cos, lay.sin, L.qk_eps)
-        if lay.static is None:
+        if lay.prefix is not None and not lay.prefix_write:
+            cache, meta = lay.prefix.layers[lay.layer_index], lay.prefix_meta
+            keys = torch.cat([cache.k, k]).index_select(0, meta.kv_idx)
+            values = torch.cat([cache.v, v]).index_select(0, meta.kv_idx)
+            o = self.ops.attention_prefixed(self.attention, q, keys, values, lay.cu32, meta.cu_k32,
+                                            lay.max_len, max(meta.kv_lengths), lay.lengths, meta.kv_lengths, True)
+        elif lay.share is not None:          # each child's keys: its root's prefix, then its own
+            sh = lay.share
+            o = self.ops.attention_prefixed(self.attention, q, k.index_select(0, sh.kv_idx), v.index_select(0, sh.kv_idx),
+                                            lay.cu32, sh.cu_k32, lay.max_len, sh.max_k, lay.lengths, sh.kv_lengths,
+                                            self.causal)
+        elif lay.static is None:
             o = self.ops.attention_packed(self.attention, q, k, v, lay.cu32, lay.max_len, lay.lengths, self.causal)
         else:
             o = self.ops.attention_padded(self.attention, q, k, v, lay.static, self.causal)
+        if lay.prefix is not None and lay.prefix_write:
+            cache = lay.prefix.layers[lay.layer_index]
+            cache.k, cache.v = k.clone(), v.clone()
         if gate is None:
             return self.ops.linear(o.reshape(N, nq * hd), L.o)
         if self.fused:
@@ -501,7 +678,8 @@ class Qwen35Engine:
 
     def _trunk(self, x: Tensor, lay: _Layout) -> Tensor:
         residual, delta, eps = x, None, self.eps
-        for L in self.layers:
+        for index, L in enumerate(self.layers):
+            lay.layer_index = index
             if delta is None:
                 h = self.ops.rms_norm(residual, L.w_in, eps)
             else:
@@ -528,6 +706,67 @@ class Qwen35Engine:
                           max_len=int(max(lengths)), lengths=list(lengths), pos=d_pos)
             with fla_tensor_cache():
                 return self._trunk(x, lay)
+
+    def plan_sharing(self, ids: Tensor, lengths: Sequence[int]) -> SharedPlan | None:
+        """A plan for `forward_shared` when rows share at least `min_shared_prefix` leading tokens."""
+        if not self.min_shared_prefix:
+            return None
+        return plan_shared_prefixes(ids.reshape(-1), lengths, min_prefix=self.min_shared_prefix,
+                                    conv_width=self.conv_width)
+
+    @torch.no_grad()
+    def forward_prefix(self, ids, lengths, prefix, *, write=False):
+        """Build a persistent prefix or run packed continuations from its layer states."""
+        with torch.cuda.device(self.device):
+            self.sync_norms()
+            cu, pos = packed_layout_host(lengths)
+            d_cu, d_pos = self._stager.put([cu, pos])
+            x = F.embedding(ids, self.embed)
+            cos, sin = self._rope(d_pos if write else d_pos + prefix.num_tokens)
+            meta = None
+            if not write:
+                width, P = self.conv_width, prefix.num_tokens
+                fix_rows, fix_taps, kv = [], [], []
+                for start, n in zip(cu[:-1].tolist(), lengths):
+                    kv.extend([torch.arange(P), torch.arange(P + start, P + start + n)])
+                    for i in range(min(width - 1, n)):
+                        fix_rows.append(start + i)
+                        fix_taps.append([start + i - lag if i >= lag else i - lag
+                                         for lag in range(width - 1, -1, -1)])
+                kv_lengths = [P + n for n in lengths]
+                cu_k, _ = packed_layout_host(kv_lengths)
+                rows, taps, idx, d_ck = self._stager.put([
+                    torch.tensor(fix_rows, dtype=torch.long), torch.tensor(fix_taps, dtype=torch.long).view(-1, width),
+                    torch.cat(kv), cu_k.to(torch.int32)])
+                meta = SimpleNamespace(fix_rows=rows, fix_taps=taps.view(-1, width), kv_idx=idx,
+                                       cu_k32=d_ck.to(torch.int32), kv_lengths=kv_lengths)
+            lay = _Layout(shape=(1, ids.numel()), cos=cos, sin=sin, cu=d_cu, cu_cpu=cu,
+                          cu32=d_cu.to(torch.int32), max_len=max(lengths), lengths=lengths, pos=d_pos,
+                          prefix=prefix, prefix_write=write, prefix_meta=meta)
+            with fla_tensor_cache():
+                return self._trunk(x, lay)
+
+    @torch.no_grad()
+    def forward_shared(self, ids: Tensor, plan: SharedPlan) -> Tensor:
+        """`forward_packed` (same arguments' result, same layout) with each shared prefix run once."""
+        with torch.cuda.device(self.device):
+            self.sync_norms()
+            n, R = plan.n_roots, plan.root_tokens
+            cu, _ = packed_layout_host(plan.lengths)
+            cu_k, _ = packed_layout_host(plan.kv_lengths)
+            cu_roots, cu_kids = cu[: n + 1], cu[n:] - R
+            src, out, rope, pos, d_cu, d_cu_k, d_roots, d_kids, parent, fix_rows, fix_taps, kv_idx = self._stager.put(
+                [plan.src, plan.out, plan.rope_pos, plan.conv_pos, cu, cu_k, cu_roots, cu_kids, plan.parent,
+                 plan.fix_rows, plan.fix_taps, plan.kv_idx])
+            x = F.embedding(ids.reshape(-1).index_select(0, src), self.embed)
+            cos, sin = self._rope(rope)
+            share = _Shared(root_tokens=R, cu_roots=d_roots, cu_roots_cpu=cu_roots, cu_kids=d_kids, cu_kids_cpu=cu_kids,
+                            parent=parent, fix_rows=fix_rows, fix_taps=fix_taps.view(plan.fix_taps.shape), kv_idx=kv_idx,
+                            cu_k32=d_cu_k.to(torch.int32), max_k=max(plan.kv_lengths), kv_lengths=plan.kv_lengths)
+            lay = _Layout(shape=(1, x.shape[0]), cos=cos, sin=sin, cu=d_cu, cu_cpu=cu, cu32=d_cu.to(torch.int32),
+                          max_len=max(plan.lengths), lengths=plan.lengths, pos=pos, share=share)
+            with fla_tensor_cache():
+                return self._trunk(x, lay).index_select(0, out)
 
     def _use_recurrent(self, lay: _Layout) -> bool:
         return lay.static is None and lay.max_len <= self.gdn.recurrent_max_len     # eager only; see RECURRENT_MAX_LEN

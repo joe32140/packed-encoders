@@ -19,8 +19,10 @@ class Qwen35Pieces:
     sigmoid_gate: Piece
     gdn_chunk: Piece
     gdn_recurrent: Piece
+    gdn_resume: Piece
     attention_packed: Piece
     attention_padded: Piece
+    attention_prefixed: Piece
 
     def all(self):
         return tuple(getattr(self, f.name) for f in fields(self))
@@ -28,9 +30,10 @@ class Qwen35Pieces:
     def bind(self):
         from packed_encoders.pieces import hybrid as h
         from packed_encoders.pieces.numerical import LINEAR
-        from packed_encoders.pieces.varlen import PACKED, PADDED
+        from packed_encoders.pieces.varlen import PACKED, PADDED, PREFIXED
 
-        contracts = (LINEAR, h.RMS, h.ADD_RMS, h.SWIGLU, h.CONV, h.GATED_RMS, h.QK_ROPE, h.QK_PAIR, h.GATE, h.GDN, h.GDN, PACKED, PADDED)
+        contracts = (LINEAR, h.RMS, h.ADD_RMS, h.SWIGLU, h.CONV, h.GATED_RMS, h.QK_ROPE, h.QK_PAIR, h.GATE, h.GDN, h.GDN,
+                     h.GDN_RESUME, PACKED, PADDED, PREFIXED)
         for slot, piece, required in zip(fields(self), self.all(), contracts):
             if piece.contract != required:
                 raise UnsupportedTargetError(f"incompatible {slot.name} piece {piece.name}: expected {required}")
@@ -45,7 +48,14 @@ class Qwen35Pieces:
             return torch.randn(shape, device=engine.device, dtype=engine.dtype, generator=gen)
         reports = {}
         def probe(slot, *args):
-            reports[slot] = getattr(self, slot).validate(*args)
+            try:
+                reports[slot] = getattr(self, slot).validate(*args)
+            except Exception as exc:
+                if slot not in ("gdn_resume", "attention_prefixed"):
+                    raise
+                engine.share_rejected = f"{slot} validation failed: {type(exc).__name__}: {str(exc)[:200]}"
+                engine.min_shared_prefix = 0
+                skip(slot, engine.share_rejected)
         def skip(slot, reason):
             p = getattr(self, slot)
             reports[slot] = PieceValidation(p.name, None, p.rtol, p.atol, reason)
@@ -98,8 +108,13 @@ class Qwen35Pieces:
                 probe("gdn_recurrent", *args, cu, cu_cpu)
             else:
                 skip("gdn_recurrent", "recurrent policy disabled by probe")
+            if engine.share_rejected is None:
+                state = 0.1 * torch.randn(3, gdn.nv, gdn.hk, gdn.hv, device=engine.device, generator=gen)
+                probe("gdn_resume", *args, state, cu, cu_cpu)
+            else:
+                skip("gdn_resume", f"no shared prefixes: {engine.share_rejected}")
         else:
-            for slot in ("gdn_chunk", "gdn_recurrent"):
+            for slot in ("gdn_chunk", "gdn_recurrent", "gdn_resume"):
                 skip(slot, "no GatedDeltaNet layer")
         if engine.attention is not None:
             from packed_encoders.runtime.graphs import PaddedStatic
@@ -111,15 +126,23 @@ class Qwen35Pieces:
                                   torch.tensor([5, 9], dtype=torch.int32, device=engine.device))
             probe("attention_padded", engine.attention, rand(18, attn.nq, attn.hd),
                   rand(18, attn.nkv, attn.hd), rand(18, attn.nkv, attn.hd), static, engine.causal)
+            if engine.share_rejected is None:
+                lq, lk = [5, 1, 11], [9, 1, 30]
+                cq, ck = (packed_layout_host(x)[0].to(engine.device, torch.int32) for x in (lq, lk))
+                probe("attention_prefixed", engine.attention, rand(17, attn.nq, attn.hd), rand(40, attn.nkv, attn.hd),
+                      rand(40, attn.nkv, attn.hd), cq, ck, 11, 30, lq, lk, engine.causal)
+            else:
+                skip("attention_prefixed", f"no shared prefixes: {engine.share_rejected}")
         else:
-            for slot in ("attention_packed", "attention_padded"):
+            for slot in ("attention_packed", "attention_padded", "attention_prefixed"):
                 skip(slot, "no softmax attention layer")
         return reports
 
 
 def default_pieces():
-    from packed_encoders.pieces.hybrid import default_numerical, gdn_piece
+    from packed_encoders.pieces.hybrid import default_numerical, gdn_piece, gdn_resume_piece
     from packed_encoders.pieces.varlen import attention_pieces
-    packed, padded = attention_pieces()
+    packed, padded, prefixed = attention_pieces()
     return Qwen35Pieces(**default_numerical(), gdn_chunk=gdn_piece(), gdn_recurrent=gdn_piece(recurrent=True),
-                        attention_packed=packed, attention_padded=padded)
+                        gdn_resume=gdn_resume_piece(), attention_packed=packed, attention_padded=padded,
+                        attention_prefixed=prefixed)

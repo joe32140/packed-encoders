@@ -186,10 +186,10 @@ at zero. Other `PackedBatch` metadata is rejected explicitly; the engine does no
 silently discard custom positions or transfer device boundaries back to the host.
 The topk adapter still reads its wrapper's device boundaries to obtain host lengths.
 
-`Qwen35Pieces` selects 13 executable pieces: projection, RMSNorm, residual RMSNorm,
+`Qwen35Pieces` selects 15 executable pieces: projection, RMSNorm, residual RMSNorm,
 SwiGLU, causal convolution with gate extraction, gated RMSNorm, single and paired
-Q/K RMSNorm with partial RoPE, sigmoid output gate, chunked and recurrent
-GatedDeltaNet, and packed and segmented-padded GQA attention. The reusable pieces
+Q/K RMSNorm with partial RoPE, sigmoid output gate, chunked, recurrent and resumed
+GatedDeltaNet, and packed, segmented-padded and prefixed GQA attention. The reusable pieces
 live under `packed_encoders.pieces`; they take explicit weights and metadata, not
 models. A composition's `bind()` checks contracts once. The layer schedule invokes
 the selected callables in eager execution and capture; replay bypasses Python.
@@ -278,3 +278,107 @@ calls, while the padding dominates multi-row batches:
 Measured on pplx-decider-v1-27b's backbone, with `PaddedGraphConfig(row_buckets=(1, 8),
 max_tokens=8192, max_seq=4096)`, and on pplx-embed-v2-context-9b-preview. Pack large models
 with `cuda_graph=False` for padded batches, and keep graphs for single-row traffic.
+
+**Shared prefixes.** A decision model asking several questions about one context sends rows
+that repeat the system prompt and the context; a shared system prompt or few-shot block does
+the same. On a causal engine that opts in, rows whose first `min_shared_prefix` tokens agree
+run their longest common prefix once, and each row continues from it with its own tokens
+(every row keeps at least one). Rows sharing a prefix must be in the same batch, in any order.
+
+A mask can't do this on a hybrid backbone. Attention could be masked so that each row sees
+only the prefix and itself, but GatedDeltaNet carries context in a recurrent state, and its
+short conv reads the previous tokens directly. A row packed after another row would still
+see it. So the engine forks the state instead. Each prefix runs from a zero state. Each
+continuation starts from its prefix's final GatedDeltaNet state and conv inputs, and attends
+to the prefix's keys and values with an end-aligned causal mask. fla's `initial_state` and
+the varlen attention kernels already do this; the resume and the end-aligned attention are
+probed at pack time like the other kernels. Bidirectional models never share, since a
+prefix's states depend on what follows.
+
+```python
+pe.pack(model, cuda_graph=False)
+pe.get_engine(model).min_shared_prefix = 64      # opt in; 0, the default, runs every row in full
+rows = [context + question for context in contexts for question in questions]
+batch = tokenizer(rows, padding=True, return_tensors="pt").to("cuda")
+with torch.no_grad():
+    hidden = model(**batch, use_cache=False).last_hidden_state
+```
+
+Sharing is off by default because the shared pass runs eagerly and calls GatedDeltaNet twice
+per layer, once for the prefixes and once for the continuations. It pays where a forward is
+compute bound, as on a large model or long rows, and costs on a small model with short rows.
+Speedup at batch 8 with `min_shared_prefix=64` over every row in full, on the faster of graphs
+and eager (for the 27B, eager: graphs don't help its 8-row batches):
+
+| Model, GPU | Rows | 2 rows per prefix | 4 | 8 |
+|---|---|---|---|---|
+| 27B decision model, H100 | 71- to 3,096-token context + a question | 1.8x | 3.0x | 4.2x |
+| Qwen3.5-0.8B, L40S | 1,024-token prefix + up to 1,024 own tokens | 1.31x | 1.35x | 1.37x |
+| Qwen3.5-0.8B, L40S | 1,024-token prefix + up to 32 | 0.98x | 0.99x | 0.99x |
+| Qwen3.5-0.8B, L40S | 128-token prefix + up to 1,024 | 0.66x | 0.58x | 0.58x |
+| Qwen3.5-0.8B, L40S | 128-token prefix + up to 32 | 0.12x | 0.13x | 0.13x |
+
+The 27B rows are pplx-decider-v1-27b's backbone under its own batching (flash-attn 2,
+`cuda_graph=False`). With 4 rows per context, its probabilities stay as close to stock as
+stock's own batch 1 and batch 8 are to each other: max absolute difference 0.021 against a
+0.020 floor, and the argmax agrees on 64/64 rows. The Qwen3.5-0.8B rows come from the
+benchmark below on the pinned stack (torch varlen attention). There, the shared pass has a
+floor of about 85 ms per batch however few tokens it computes, and shared rows match the
+model's own forward as closely as unshared rows (per-token cosine 0.99985 to 0.99988 mean).
+Measure a model before opting in:
+
+```bash
+python benchmarks/qwen35_shared_prefix_bench.py --model Qwen/Qwen3.5-0.8B --out shared.json
+```
+
+Batches with shared prefixes run eagerly, without graphs. With sharing on, planning reads the
+batch's leading tokens once per call, when at least two rows are longer than
+`min_shared_prefix`. `validate()` checks the shared pass against the model's own forward even
+while sharing is off and reports `shared_cos_mean` / `shared_cos_min`;
+`shared_prefix_rejected` says why a model can't share.
+
+Sharing-only probe, operation-validation, and full-model-validation failures disable
+sharing and record a reason; they do not reject an otherwise valid ordinary pack.
+All random validation and benchmark IDs stay below the regular-vocabulary bound.
+
+When CuTe DSL is installed, branch-boundary convolutions use one fused GPU kernel.
+For batches of at most 64 rows, an exact CuTe prefix comparison avoids padded
+comparison tensors and sorting. Larger batches and installations without CuTe retain
+the original planner. These kernels support graph capture individually; the complete
+shared path still builds host FLA metadata and executes eagerly.
+
+### Explicit reuse across calls (experimental)
+
+A causal packed backbone can prepare a prefix once and retain its per-layer
+GatedDeltaNet states, convolution histories and attention K/V on the GPU:
+
+```python
+packed = pe.get_engine(model)
+with torch.no_grad():
+    with packed.prepare_prefix(prefix_ids, max_bytes=64 << 20) as prefix:
+        # IDs are flat CUDA int64 tensors; lengths are positive host integers.
+        hidden = prefix.forward_suffixes(suffix_ids, suffix_lengths)
+        # hidden: [sum(suffix_lengths), hidden_size], suffix tokens only.
+        # The same prefix can serve further batches of different suffixes here.
+```
+
+The result is final-normalized backbone hidden states, before any wrapper head.
+`prefix.hidden_states` holds the prefix tokens' own final hidden states; treat all
+cached tensors as read-only. Positions of each suffix start at the prefix length.
+The caller owns the handles and may retain several, subject to its overall memory
+budget. `max_bytes` bounds the retained tensors **per handle**, excluding model
+weights and temporary forward workspace; `prefix.nbytes` reports retained bytes.
+
+Handles close explicitly, on context exit, or when the model is unpacked. In-place
+PyTorch parameter updates and parameter replacement invalidate them. Writes through
+`.data` or external pointers bypass version tracking: close handles before those
+writes or before changing model configuration. Prefix reuse requires default,
+length-independent RoPE, disabled autograd and disabled autocast. This first API is
+eager; it does not yet capture the whole continuation into a CUDA graph.
+
+Measure preparation cost and repeated-call latency on your workload:
+
+```bash
+python benchmarks/qwen35_prepared_prefix_bench.py --model Qwen/Qwen3.5-0.8B --out prepared.json
+python benchmarks/qwen35_prefix_profile.py --model Qwen/Qwen3.5-0.8B --out profile.json --ab-conv --ab-planner
+```
