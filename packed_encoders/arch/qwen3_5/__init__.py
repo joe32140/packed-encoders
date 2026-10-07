@@ -11,8 +11,11 @@ signature*, and each patched forward keeps its wrapper's contract exactly:
     `config.is_causal` says. The model's own pooling or readout then runs unchanged.
 
 What `pack()` installs, per batch:
-  - text batches, no grad: CUDA graph replay when the batch fits a `(rows, S)` bucket, else the
-    eager packed engine; then (topk) the model's own head, slice, and L2 norm.
+  - text batches, no grad, rows sharing at least `min_shared_prefix` leading tokens (causal
+    engines, opt in; a decision model asking several questions about one context): each
+    shared prefix runs once (`engine.forward_shared`).
+  - other text batches, no grad: CUDA graph replay when the batch fits a `(rows, S)` bucket, else
+    the eager packed engine; then (topk) the model's own head, slice, and L2 norm.
   - image batches, grad-enabled calls, and anything else the engine can't serve: the
     original forward, untouched.
 
@@ -42,6 +45,18 @@ MIN_CAPABILITY = (8, 0)   # bf16 tensor cores; fla's Triton kernels target sm_80
 EAGER_MEAN_COS, EAGER_MIN_COS = 0.999, 0.98
 GRAPH_MEAN_COS, GRAPH_MIN_COS = 0.9995, 0.99
 _BACKENDS = {None: None, "auto": None, "flash": ("flash4", "flash2", "torch_varlen"), "sdpa": ("sdpa",)}
+
+
+def _validation_ids_below(cfg) -> int:
+    """Validation's random token ids come from the regular vocabulary, below this. Qwen tokenizers put their
+    special tokens after it, then the embedding's padding rows: ids no tokenizer emits, rows training never
+    reached. One of those in a row can take the model's own bf16 forward far from fp32 (Qwen3.5-4B on an
+    L40S: cosine 0.87 on that token, the engine 0.97), so a check there measures the reference, not the
+    engine. The lowest special token the config names in the embedding's upper half starts that tail."""
+    rows = cfg.vocab_size
+    named = [i for k, v in vars(cfg).items() if k.endswith("_token_id")
+             for i in (v if isinstance(v, (list, tuple)) else (v,)) if isinstance(i, int) and rows // 2 <= i < rows]
+    return min(named, default=rows)
 
 
 def _topk_text_model(module: nn.Module) -> nn.Module | None:
@@ -86,6 +101,9 @@ class Qwen35Report:
     eager_cos_min: float = 0.0
     graph_cos_mean: float | None = None
     graph_cos_min: float | None = None
+    shared_prefix_rejected: str | None = None  # why rows can't share prefixes here (None: they can, opt in)
+    shared_cos_mean: float | None = None       # rows continuing shared prefixes vs the model's forward
+    shared_cos_min: float | None = None
     notes: list[str] = field(default_factory=list)
     pieces: dict = field(default_factory=dict)
 
@@ -124,6 +142,9 @@ def _vectors(state: Qwen35State, hidden: Tensor) -> Tensor:
 
 def _hidden_once(state: Qwen35State, ids: Tensor, lengths, *, graphs: bool) -> Tensor:
     state.engine.sync_norms()                 # norms trained since packing reach the graphs too
+    plan = state.engine.plan_sharing(ids, lengths)
+    if plan is not None:
+        return state.engine.forward_shared(ids, plan)
     hidden = None
     if graphs and state.runner is not None and state.graph_enabled and not graphs_globally_disabled() \
             and not torch.is_autocast_enabled("cuda"):
@@ -366,16 +387,56 @@ class Qwen35Hybrid:
             probe_state = state or self._state(module, engine, oracle, runner=None, graph_enabled=False)
             for lengths in batches:
                 self._check_numerics(module, oracle, probe_state, lengths, graphs, report)
+            if engine.share_rejected is None:
+                self._check_sharing(module, oracle, probe_state, report)
+            report.shared_prefix_rejected = engine.share_rejected
+            if engine.share_rejected and engine.causal:
+                report.notes.append(f"shared prefixes unavailable: {engine.share_rejected}")
+                warnings.warn(f"packed-encoders: {engine.share_rejected}; every row runs in full", stacklevel=4)
         finally:
             if built_here:
                 engine.release(rollback=True)
         return report
 
-    def _check_numerics(self, module, oracle, state: Qwen35State, lengths, graphs, report: Qwen35Report) -> None:
+    def _check_sharing(self, module, oracle, state: Qwen35State, report: Qwen35Report) -> None:
+        """Rows continuing two shared prefixes (children of 1 to 20 tokens) beside rows sharing nothing,
+        against the model's own forward, whether or not sharing is on. A miss makes sharing unavailable
+        (recorded) rather than failing the pack."""
+        from packed_encoders.arch.qwen3_5.engine import SHARED_PREFIX_MIN
+
+        engine, threshold = state.engine, state.engine.min_shared_prefix
+        m = threshold or SHARED_PREFIX_MIN
+        g = torch.Generator().manual_seed(1)
+
+        def rand(n):
+            return torch.randint(0, _validation_ids_below(engine.cfg), (n,), generator=g)
+
+        a, b = rand(m + 30), rand(m + 6)
+        seqs = [torch.cat([a, rand(7)]), rand(40), torch.cat([b, rand(12)]), torch.cat([a, rand(1)]),
+                rand(m + 50), torch.cat([b, rand(3)]), torch.cat([a, rand(20)])]
+        reason = None
+        try:
+            engine.min_shared_prefix = m
+            if engine.plan_sharing(torch.cat(seqs).to(engine.device), [len(s) for s in seqs]) is None:
+                raise ValidationError("the shared-prefix validation batch formed no group")
+            shared, ref, _ = self._compare(module, oracle, state, seqs)
+            cos = F.cosine_similarity(shared, ref, dim=-1)
+            report.shared_cos_mean, report.shared_cos_min = cos.mean().item(), cos.min().item()
+            if not (report.shared_cos_mean >= EAGER_MEAN_COS and report.shared_cos_min >= EAGER_MIN_COS):
+                reason = (f"rows continuing shared prefixes diverged from the model's forward: per-token cosine "
+                          f"mean {report.shared_cos_mean:.6f} min {report.shared_cos_min:.5f}")
+        except Exception as exc:  # optional optimization; ordinary numerics have already passed
+            reason = f"shared-prefix validation failed: {type(exc).__name__}: {str(exc)[:200]}"
+        finally:
+            engine.min_shared_prefix = threshold if reason is None else 0
+        if reason is not None:
+            engine.share_rejected = reason
+
+    def _compare(self, module, oracle, state: Qwen35State, seqs: list[Tensor]) -> tuple[Tensor, Tensor, Tensor]:
+        """The eager engine and the model's own forward on `seqs`, real tokens in packed order: (eager, ref, ids)."""
         device = state.engine.device
         topk = _topk_text_model(module) is not None
-        g = torch.Generator().manual_seed(0)
-        seqs = [torch.randint(0, state.engine.cfg.vocab_size, (n,), generator=g) for n in lengths]
+        lengths = [len(x) for x in seqs]
         B, S = len(seqs), max(lengths)
         lens = torch.tensor(lengths)
         packed = torch.cat(seqs)
@@ -401,7 +462,14 @@ class Qwen35Hybrid:
                     f"{str(exc).splitlines()[0][:200]}); cannot certify the engine here. Pass validate=False to "
                     "skip at your own risk.") from exc
             ids = packed.to(device)
-            eager = _encode_text(state, ids, list(lengths), graphs=False).float()
+            return _encode_text(state, ids, lengths, graphs=False).float(), ref, ids
+
+    def _check_numerics(self, module, oracle, state: Qwen35State, lengths, graphs, report: Qwen35Report) -> None:
+        g = torch.Generator().manual_seed(0)
+        seqs = [torch.randint(0, _validation_ids_below(state.engine.cfg), (n,), generator=g) for n in lengths]
+        B = len(seqs)
+        eager, ref, ids = self._compare(module, oracle, state, seqs)
+        with torch.no_grad():
             cos = F.cosine_similarity(eager, ref, dim=-1)
             mean, low = cos.mean().item(), cos.min().item()
             report.eager_cos_mean = mean if report.eager_cos_mean == 0.0 else min(report.eager_cos_mean, mean)
@@ -498,6 +566,23 @@ class PackedQwen35:
         self._require_open()
         self.state.graph_enabled = enabled
 
+    @property
+    def min_shared_prefix(self) -> int:
+        """Rows that share at least this many leading tokens run that prefix once; 0, the default,
+        runs every row in full. It pays where a forward is compute bound (engine.SHARED_PREFIX_MIN
+        has measurements); the report's `shared_prefix_rejected` says why a model can't share."""
+        return self.state.engine.min_shared_prefix
+
+    @min_shared_prefix.setter
+    def min_shared_prefix(self, tokens: int) -> None:
+        self._require_open()
+        engine = self.state.engine
+        if tokens < 0:
+            raise PackedEncodersError("min_shared_prefix must be >= 0")
+        if tokens and engine.share_rejected:
+            raise PackedEncodersError(f"shared prefixes are unavailable here: {engine.share_rejected}")
+        engine.min_shared_prefix = max(int(tokens), engine.conv_width) if tokens else 0
+
     def forward_packed(self, batch):
         """Return final-normed hidden states (for topk, before its head and normalization).
 
@@ -516,6 +601,15 @@ class PackedQwen35:
         if batch.cu_seqlens is not None or batch.position_ids is not None or batch.max_seqlen is not None:
             raise PackedEncodersError("Qwen3.5 takes host_lengths only; positions restart per sequence")
         return _hidden(self.state, ids, lengths, graphs=True)
+
+    def prepare_prefix(self, input_ids, *, max_bytes=256 << 20):
+        """Cache one causal prefix on the GPU; see PreparedPrefix.forward_suffixes.
+
+        The budget bounds retained cache tensors, excluding weights and temporary
+        forward workspace. Handles must be closed before out-of-band weight writes.
+        """
+        from packed_encoders.arch.qwen3_5.prefix_cache import PreparedPrefix
+        return PreparedPrefix(self, input_ids, max_bytes)
 
     def validate(self, **kwargs):
         self._require_open()

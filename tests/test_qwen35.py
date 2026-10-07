@@ -146,6 +146,11 @@ def test_attention_probe_selects_a_passing_kernel(causal):
     varlen = select_attention(n_heads=8, n_kv_heads=2, head_dim=256, causal=causal, device=torch.device("cuda"),
                               order=("torch_varlen",))
     assert varlen.name == "torch_varlen" and varlen.max_abs_err < PROBE_TOLERANCE
+    # Causal engines also get query segments aligned to the end of longer key segments (shared prefixes).
+    for c in (choice, sdpa, varlen):
+        assert (c.prefixed is not None) == causal, c.rejected
+        assert not causal or c.prefixed_max_abs_err < PROBE_TOLERANCE
+    assert not causal or sdpa.prefixed_name == "sdpa"
 
 
 # ---------------------------------------------------------------------------- engine on a tiny Qwen3.5
@@ -245,6 +250,46 @@ def test_engine_matches_hf_per_sequence_packed_and_graphed(tiny, lengths):
             hf_bf16 = F.cosine_similarity(ref, truth, dim=-1).mean().item()
             for x in (packed, chunked):
                 assert F.cosine_similarity(x, truth, dim=-1).mean().item() > hf_bf16 - 1e-4
+    finally:
+        unshare_rows(eng.shared)
+
+
+def _shared_rows(g, prefix=90):
+    """Two groups of rows continuing a shared prefix (1 to 30 own tokens), and rows sharing nothing."""
+    def rand(n):
+        return torch.randint(0, 1024, (n,), generator=g)
+
+    a, b = rand(prefix), rand(prefix - 20)
+    return [torch.cat([a, rand(5)]), rand(50), torch.cat([b, rand(30)]), torch.cat([a, rand(1)]), rand(120),
+            torch.cat([b, rand(2)]), torch.cat([a, rand(12)])]
+
+
+@pytest.mark.parametrize("order,fused", [(None, True), (None, False), (("sdpa",), True)],
+                         ids=["selected", "unfused", "sdpa"])
+def test_shared_prefixes_run_once_and_match_full_rows(tiny, order, fused):
+    from packed_encoders.arch.qwen3_5.engine import GDN_PROBE_TOLERANCE, Qwen35Engine, unshare_rows
+
+    eng = Qwen35Engine(tiny, causal=True, attention_order=order)
+    try:
+        assert eng.share_rejected is None and eng.share_err < GDN_PROBE_TOLERANCE
+        eng.fused = eng.fused and fused
+        seqs = [s.cuda() for s in _shared_rows(torch.Generator().manual_seed(4))]
+        ids, lengths = torch.cat(seqs), [len(s) for s in seqs]
+        assert eng.min_shared_prefix == 0 and eng.plan_sharing(ids, lengths) is None      # opt in
+        eng.min_shared_prefix = 64
+        plan = eng.plan_sharing(ids, lengths)
+        assert plan.saved_tokens == 2 * 90 + 70
+        shared = eng.forward_shared(ids, plan).float()
+        unshared = eng.forward_packed(ids, lengths).float()
+        ref = torch.cat([_hf_hidden(tiny, s) for s in seqs])
+        cos = F.cosine_similarity(shared, ref, dim=-1)
+        assert cos.mean().item() > 0.999 and cos.min().item() > 0.99, (cos.mean().item(), cos.min().item())
+        # Held to the fp32 model, sharing loses nothing against running every row in full.
+        truth = torch.cat([_hf_hidden(copy.deepcopy(tiny).float(), s) for s in seqs])
+        full = F.cosine_similarity(unshared, truth, dim=-1).mean().item()
+        assert F.cosine_similarity(shared, truth, dim=-1).mean().item() > full - 1e-4
+        eng.min_shared_prefix = 0
+        assert eng.plan_sharing(ids, lengths) is None
     finally:
         unshare_rows(eng.shared)
 
@@ -489,7 +534,7 @@ def test_qwen_prepared_boundary_pieces_controls_and_teardown(topk_tiny):
             assert calls[slot] > 0, slot
         report = packed.validate(batches=((7, 70),), graphs=True)
         assert report.engine == "qwen3_5" and report.details.eager_cos_mean > 0.999
-        assert len(report.details.pieces) == 13
+        assert len(report.details.pieces) == 15
         param.add_(0.01)
         updated = param.clone()
     with pytest.raises(PackedEncodersError, match="unpack"):
@@ -816,6 +861,61 @@ def test_hf_entry_preserves_config_requested_outputs(tiny, kind, option, field):
         pe.unpack(model)
 
 
+@pytest.mark.parametrize("kind", ["subclass_causal", "subclass_bidirectional"])
+def test_hf_entry_runs_each_shared_prefix_once(tiny, kind):
+    """Rows continuing shared prefixes, left padded, as a decision model batches several questions
+    about one context. Pack validates the shared pass; it runs once the caller opts in."""
+    import packed_encoders as pe
+
+    _shims()
+    model = _stock(tiny, kind)
+    seqs = _shared_rows(torch.Generator().manual_seed(6))
+    S = max(map(len, seqs))
+    ids = torch.zeros(len(seqs), S, dtype=torch.long)
+    mask = torch.zeros_like(ids)
+    for i, s in enumerate(seqs):
+        ids[i, S - len(s):], mask[i, S - len(s):] = s, 1
+    ids, mask = ids.cuda(), mask.cuda()
+
+    def run():
+        with torch.no_grad():
+            return model(input_ids=ids, attention_mask=mask, use_cache=False).last_hidden_state
+
+    stock = run()
+    pe.pack(model)
+    packed = pe.get_engine(model)
+    report, engine = packed.state.report, packed.state.engine
+    try:
+        if kind == "subclass_bidirectional":
+            assert packed.min_shared_prefix == 0 and "bidirectional" in report.shared_prefix_rejected
+            with pytest.raises(pe.PackedEncodersError, match="unavailable"):
+                packed.min_shared_prefix = 64
+            return
+        assert packed.min_shared_prefix == 0 and report.shared_prefix_rejected is None
+        assert report.shared_cos_mean > 0.999 and len(report.pieces) == 15
+        saved, forward_shared = [], engine.forward_shared
+        engine.forward_shared = lambda ids, plan: saved.append(plan.saved_tokens) or forward_shared(ids, plan)
+        run()
+        assert saved == []                                           # off by default
+        with pytest.raises(pe.PackedEncodersError, match=">= 0"):
+            packed.min_shared_prefix = -1
+        packed.min_shared_prefix = 64
+        out = run()
+        assert saved == [2 * 90 + 70]
+        real = mask.bool()
+        cos = F.cosine_similarity(out[real].float(), stock[real].float(), dim=-1)
+        assert cos.mean().item() > 0.999 and cos.min().item() > 0.99, (cos.mean().item(), cos.min().item())
+        assert not out[~real].any()
+        packed.min_shared_prefix = 0
+        run()
+        assert saved == [250]                                        # every row in full now
+        packed.min_shared_prefix = 128                               # a's prefix is 90 tokens: no group
+        run()
+        assert saved == [250]
+    finally:
+        pe.unpack(model)
+
+
 def test_unpack_frees_merged_weights_as_it_goes(tiny):
     """Unpack restores independent storage one projection group at a time: a second copy of every
     projection does not fit beside a 27B model's weights on an 80 GB GPU."""
@@ -834,3 +934,64 @@ def test_unpack_frees_merged_weights_as_it_goes(tiny):
     extra = torch.cuda.max_memory_allocated() - before
     assert extra <= max(sizes) + (64 << 10), (extra, max(sizes), sum(sizes))
     assert torch.cuda.memory_allocated() <= before + (64 << 10)
+
+
+@pytest.mark.parametrize("failure", ["forward", "gdn_resume", "attention_prefixed", "probe", "numerics"])
+def test_optional_sharing_failure_keeps_ordinary_pack(tiny, monkeypatch, failure):
+    import packed_encoders as pe
+    from packed_encoders.arch.qwen3_5.engine import Qwen35Engine
+    from packed_encoders.pieces.base import Piece
+
+    model = copy.deepcopy(tiny)
+    def fail(*a, **kw):
+        raise RuntimeError("injected sharing failure")
+    if failure == "forward":
+        monkeypatch.setattr(Qwen35Engine, "forward_shared", fail)
+    elif failure == "probe":
+        monkeypatch.setattr(Qwen35Engine, "_check_sharing", fail)
+    elif failure == "numerics":
+        original = Qwen35Engine.forward_shared
+        monkeypatch.setattr(Qwen35Engine, "forward_shared", lambda *a, **kw: original(*a, **kw) * 0)
+    else:
+        original = Piece.validate
+        contract = {"gdn_resume": "gated_delta_rule_resume", "attention_prefixed": "prefixed_varlen_attention"}[failure]
+        def validate(piece, *a, **kw):
+            return fail() if piece.contract.operation == contract else original(piece, *a, **kw)
+        monkeypatch.setattr(Piece, "validate", validate)
+    with pytest.warns(UserWarning, match="every row runs in full"):
+        pe.pack(model, cuda_graph=False)
+    try:
+        packed = pe.get_engine(model)
+        assert packed.min_shared_prefix == 0
+        assert packed.state.report.shared_prefix_rejected
+        with pytest.raises(pe.PackedEncodersError, match="unavailable"):
+            packed.min_shared_prefix = 64
+        with torch.no_grad():
+            ids = torch.arange(10, device="cuda")[None]
+            out = model(ids, use_cache=False).last_hidden_state
+            ref = packed.state.original_forward(ids, use_cache=False).last_hidden_state
+        assert F.cosine_similarity(out.float(), ref.float(), dim=-1).min() > 0.99
+    finally:
+        pe.unpack(model)
+
+
+@pytest.mark.parametrize("prefix,suffix", [(63, 129), (64, 128), (65, 257), (127, 513), (128, 1), (129, 255)])
+def test_sharing_across_chunk_boundaries(tiny, prefix, suffix):
+    from packed_encoders.arch.qwen3_5.engine import Qwen35Engine
+    model = copy.deepcopy(tiny)
+    engine = Qwen35Engine(model, causal=True)
+    try:
+        g = torch.Generator().manual_seed(prefix)
+        p = torch.randint(0, 1024, (prefix,), generator=g)
+        a = torch.cat([p, torch.randint(0, 1024, (suffix,), generator=g)])
+        b = torch.cat([p, torch.randint(0, 1024, (suffix + 3,), generator=g)])
+        seqs = [a, b, a.clone()]  # identical rows beside a divergent continuation
+        ids, lengths = torch.cat(seqs).cuda(), list(map(len, seqs))
+        engine.min_shared_prefix = 4
+        plan = engine.plan_sharing(ids, lengths)
+        got = engine.forward_shared(ids, plan).float()
+        ref = torch.cat([_hf_hidden(model, s.cuda()) for s in seqs])
+        cos = F.cosine_similarity(got, ref, dim=-1)
+        assert cos.mean() > 0.999 and cos.min() > 0.99
+    finally:
+        engine.release()

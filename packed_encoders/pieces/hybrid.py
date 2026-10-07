@@ -157,30 +157,43 @@ def default_numerical():
 
 GDN = Contract("gated_delta_rule", "q,k [B,S,H,K], v [B,S,H,V], raw a,b [B,S,H], A_log,dt_bias [H] -> [B,S,H,V]",
                "causal zero-state recurrence; in-kernel L2 Q/K norm, softplus decay and sigmoid beta; optional sequence boundaries", autograd=False)
+GDN_RESUME = Contract("gated_delta_rule_resume", "GDN inputs [1,T,...], initial state [N,H,K,V] fp32 or None, boundaries -> [1,T,H,V], final states [N,H,K,V] fp32",
+                      "the same recurrence, sequence i continuing from initial state i (zero if None)", autograd=False)
 
 
-def reference_delta(q, k, v, g, beta, lengths):
-    """Independent fp32 token-by-token oracle; expanded value heads, log decay."""
+def reference_delta(q, k, v, g, beta, lengths, initial_state=None, final_state=False):
+    """Independent fp32 token-by-token oracle; expanded value heads, log decay. Sequence i starts
+    from `initial_state[i]` ([N,H,K,V], zero if None); `final_state` also returns where each ends."""
     q, k = F.normalize(q.float(), dim=-1) * q.shape[-1] ** -0.5, F.normalize(k.float(), dim=-1)
     v, g, beta = v.float(), g.float(), beta.float()
-    out, start = torch.empty_like(v), 0
-    for n in lengths:
-        state = v.new_zeros(v.shape[1], k.shape[-1], v.shape[-1])
+    out, start, finals = torch.empty_like(v), 0, []
+    for i, n in enumerate(lengths):
+        state = (v.new_zeros(v.shape[1], k.shape[-1], v.shape[-1]) if initial_state is None
+                 else initial_state[i].float())
         for t in range(start, start+n):
             state = state * g[t].exp()[:, None, None]
             update = (v[t] - torch.einsum("hk,hkv->hv", k[t], state)) * beta[t][:, None]
             state = state + k[t][:, :, None] * update[:, None, :]
             out[t] = torch.einsum("hk,hkv->hv", q[t], state)
+        finals.append(state)
         start += n
-    return out
+    return (out, torch.stack(finals)) if final_state else out
 
 
-def ref_gdn(q, k, v, a, b, a_log, dt_bias, cu=None, cu_cpu=None):
+def ref_gdn(q, k, v, a, b, a_log, dt_bias, cu=None, cu_cpu=None, initial_state=None, final_state=False):
     lengths = cu_cpu.diff().tolist() if cu_cpu is not None else [q.shape[1]] * q.shape[0]
     repeat = v.shape[2] // q.shape[2]
     qq, kk = (t.flatten(0, 1).repeat_interleave(repeat, 1) for t in (q, k))
     decay = -a_log.float().exp() * F.softplus(a.flatten(0, 1).float() + dt_bias.float())
-    return reference_delta(qq, kk, v.flatten(0, 1), decay, b.flatten(0, 1).float().sigmoid(), lengths).view_as(v).to(v.dtype)
+    out = reference_delta(qq, kk, v.flatten(0, 1), decay, b.flatten(0, 1).float().sigmoid(), lengths,
+                          initial_state, final_state)
+    if final_state:
+        return out[0].view_as(v).to(v.dtype), out[1]
+    return out.view_as(v).to(v.dtype)
+
+
+def ref_gdn_resume(q, k, v, a, b, a_log, dt_bias, initial_state, cu, cu_cpu):
+    return ref_gdn(q, k, v, a, b, a_log, dt_bias, cu, cu_cpu, initial_state, final_state=True)
 
 
 def check_gdn(q, k, v, a, b, a_log, dt_bias, cu=None, cu_cpu=None):
@@ -188,6 +201,23 @@ def check_gdn(q, k, v, a, b, a_log, dt_bias, cu=None, cu_cpu=None):
              and v.shape[2] % q.shape[2] == 0 and a.shape == b.shape == v.shape[:3]
              and a_log.shape == dt_bias.shape == (v.shape[2],), "invalid gated delta rule head geometry or gates")
     _require((cu is None) == (cu_cpu is None), "GDN validation requires paired device/host boundaries")
+
+
+def check_gdn_resume(q, k, v, a, b, a_log, dt_bias, initial_state, cu, cu_cpu):
+    check_gdn(q, k, v, a, b, a_log, dt_bias, cu, cu_cpu)
+    _require(cu is not None and q.shape[0] == 1, "resuming the gated delta rule requires packed sequence boundaries")
+    _require(initial_state is None or (initial_state.dtype == torch.float32 and initial_state.shape ==
+             (cu_cpu.numel() - 1, v.shape[2], q.shape[3], v.shape[3])), "initial state must be fp32 [N,H,K,V]")
+
+
+def gdn_resume_piece():
+    from fla.ops.gated_delta_rule import chunk_gated_delta_rule
+    def execute(q, k, v, a, b, a_log, dt_bias, initial_state, cu, cu_cpu):
+        return chunk_gated_delta_rule(q, k, v, g=a, beta=b, use_qk_l2norm_in_kernel=True, use_gate_in_kernel=True,
+                                      A_log=a_log, dt_bias=dt_bias, use_beta_sigmoid_in_kernel=True,
+                                      initial_state=initial_state, output_final_state=True,
+                                      cu_seqlens=cu, cu_seqlens_cpu=cu_cpu)
+    return Piece("fla-chunk-gdn-resume", GDN_RESUME, execute, ref_gdn_resume, check_gdn_resume, rtol=0.03, atol=0.03)
 
 
 def gdn_piece(*, recurrent=False):
