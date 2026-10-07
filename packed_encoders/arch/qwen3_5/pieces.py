@@ -1,5 +1,5 @@
 """Qwen's numerical composition; sequence mixing retains its probed runtime policy."""
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, fields, replace
 from types import SimpleNamespace
 
 from packed_encoders.errors import UnsupportedTargetError
@@ -47,9 +47,13 @@ class Qwen35Pieces:
         def rand(*shape):
             return torch.randn(shape, device=engine.device, dtype=engine.dtype, generator=gen)
         reports = {}
-        def probe(slot, *args):
+        def probe(slot, *args, **kwargs):
             try:
-                reports[slot] = getattr(self, slot).validate(*args)
+                result = getattr(self, slot).validate(*args, **kwargs)
+                previous = reports.get(slot)
+                if previous is not None and previous.max_abs_error is not None:
+                    result = replace(result, max_abs_error=max(previous.max_abs_error, result.max_abs_error))
+                reports[slot] = result
             except Exception as exc:
                 if slot not in ("gdn_resume", "attention_prefixed"):
                     raise
@@ -111,6 +115,8 @@ class Qwen35Pieces:
             if engine.share_rejected is None:
                 state = 0.1 * torch.randn(3, gdn.nv, gdn.hk, gdn.hv, device=engine.device, generator=gen)
                 probe("gdn_resume", *args, state, cu, cu_cpu)
+                if engine.share_rejected is None:
+                    probe("gdn_resume", *args, state, cu, cu_cpu, output_final_state=False)
             else:
                 skip("gdn_resume", f"no shared prefixes: {engine.share_rejected}")
         else:

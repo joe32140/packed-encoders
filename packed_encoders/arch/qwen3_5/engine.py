@@ -587,9 +587,11 @@ class Qwen35Engine:
         if lay.prefix is not None:
             cache = lay.prefix.layers[lay.layer_index]
             initial = None if lay.prefix_write else cache.state.expand(len(lay.lengths), -1, -1, -1).contiguous()
+            if not lay.prefix_write:
+                return self.ops.gdn_resume(q, k, v, a, b, L.A_log, L.dt_bias, initial, lay.cu, lay.cu_cpu,
+                                           output_final_state=False)
             out, final = self.ops.gdn_resume(q, k, v, a, b, L.A_log, L.dt_bias, initial, lay.cu, lay.cu_cpu)
-            if lay.prefix_write:
-                cache.state = final.clone()
+            cache.state = final.clone()
             return out
         sh = lay.share
         if sh is None:
@@ -599,8 +601,8 @@ class Qwen35Engine:
         R, run = sh.root_tokens, self.ops.gdn_resume
         o_roots, state = run(q[:, :R], k[:, :R], v[:, :R], a[:, :R], b[:, :R], L.A_log, L.dt_bias, None,
                              sh.cu_roots, sh.cu_roots_cpu)
-        o_kids, _ = run(q[:, R:], k[:, R:], v[:, R:], a[:, R:], b[:, R:], L.A_log, L.dt_bias,
-                        state.index_select(0, sh.parent), sh.cu_kids, sh.cu_kids_cpu)
+        o_kids = run(q[:, R:], k[:, R:], v[:, R:], a[:, R:], b[:, R:], L.A_log, L.dt_bias,
+                     state.index_select(0, sh.parent), sh.cu_kids, sh.cu_kids_cpu, output_final_state=False)
         return torch.cat([o_roots, o_kids], 1)
 
     def _prefix_history(self, L, x, outs, lay):
