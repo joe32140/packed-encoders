@@ -31,7 +31,9 @@ local correctness, not performance parity on the contributor's GPUs.
   appropriate Torch ABI. Do not reuse the old Torch 2.8 binary with Torch 2.11.
 - `qwen3_5` includes Torch 2.11, Transformers 5.9, FLA, SentenceTransformers 6.x
   and matching torchvision, covering the topk checkpoint's remote wrapper.
-  Transformers is bounded below 5.10 because the adapters use internal APIs.
+  Transformers is bounded by the validated minor series because the adapters use
+  internal APIs: below 5.20 for the package, 5.9 for `qwen3_5` (topk's remote code
+  fails under 5.18), 5.19 for `embedding_gemma2`.
 - PyLate currently pins SentenceTransformers 5.3 and cannot share the topk 6.x
   environment. The explicit extras conflict makes this clear to uv; it is not a
   Torch or FA2 incompatibility. Use separate environments for these two wrappers.

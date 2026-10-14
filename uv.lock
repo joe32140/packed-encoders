@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.10, <3.15"
 resolution-markers = [
     "python_full_version >= '3.14' and sys_platform == 'win32'",
@@ -16,6 +16,12 @@ resolution-markers = [
 conflicts = [[
     { package = "packed-encoders", extra = "pylate" },
     { package = "packed-encoders", extra = "qwen3-5" },
+], [
+    { package = "packed-encoders", extra = "embedding-gemma2" },
+    { package = "packed-encoders", extra = "pylate" },
+], [
+    { package = "packed-encoders", extra = "embedding-gemma2" },
+    { package = "packed-encoders", extra = "qwen3-5" },
 ]]
 
 [[package]]
@@ -24,9 +30,9 @@ version = "1.14.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "huggingface-hub" },
-    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.11' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
-    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version == '3.11.*' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
-    { name = "numpy", version = "2.5.0", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.12' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.11' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version == '3.11.*' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "numpy", version = "2.5.0", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.12' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5')" },
     { name = "packaging" },
     { name = "psutil" },
     { name = "pyyaml" },
@@ -54,12 +60,12 @@ source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiohappyeyeballs" },
     { name = "aiosignal" },
-    { name = "async-timeout", marker = "python_full_version < '3.11' or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "async-timeout", marker = "python_full_version < '3.11' or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
     { name = "attrs" },
     { name = "frozenlist" },
     { name = "multidict" },
     { name = "propcache" },
-    { name = "typing-extensions", marker = "python_full_version < '3.13' or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "typing-extensions", marker = "python_full_version < '3.13' or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
     { name = "yarl" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/82/78/8ea7308cac6934de8c74a14f3d5f65d1c89287426688be79538d0e5c013d/aiohttp-3.14.1.tar.gz", hash = "sha256:307f2cff90a764d329e77040603fa032db89c5c24fdad50c4c15334cba744035", size = 7955794, upload-time = "2026-06-07T21:09:35.529Z" }
@@ -190,7 +196,7 @@ version = "1.4.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "frozenlist" },
-    { name = "typing-extensions", marker = "python_full_version < '3.13' or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "typing-extensions", marker = "python_full_version < '3.13' or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/61/62/06741b579156360248d1ec624842ad0edf697050bbaf7c3e46394e106ad1/aiosignal-1.4.0.tar.gz", hash = "sha256:f47eecd9468083c2029cc99945502cb7708b082c232f9aca65da147157b251c7", size = 25007, upload-time = "2025-07-03T22:54:43.528Z" }
 wheels = [
@@ -211,9 +217,9 @@ name = "anyio"
 version = "4.14.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "exceptiongroup", marker = "python_full_version < '3.11' or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "exceptiongroup", marker = "python_full_version < '3.11' or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
     { name = "idna" },
-    { name = "typing-extensions", marker = "python_full_version < '3.13' or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "typing-extensions", marker = "python_full_version < '3.13' or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/1c/b5/001890774a9552aff22502b8da382593109ce0c95314abaebbb116567545/anyio-4.14.0.tar.gz", hash = "sha256:b47c1f9ccf73e67021df785332508f99379c68fa7d0684e8e3492cb1d4b23f89", size = 253586, upload-time = "2026-06-15T22:00:49.021Z" }
 wheels = [
@@ -413,7 +419,7 @@ resolution-markers = [
     "python_full_version < '3.11'",
 ]
 dependencies = [
-    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/66/54/eb9bfc647b19f2009dd5c7f5ec51c4e6ca831725f1aea7a993034f483147/contourpy-1.3.2.tar.gz", hash = "sha256:b6945942715a034c671b7fc54f9588126b0b8bf23db2696e3ca8328f3ff0ab54", size = 13466130, upload-time = "2025-04-15T17:47:53.79Z" }
 wheels = [
@@ -491,8 +497,8 @@ resolution-markers = [
     "python_full_version == '3.11.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
 ]
 dependencies = [
-    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*' or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
-    { name = "numpy", version = "2.5.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12' or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*' or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "numpy", version = "2.5.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12' or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/58/01/1253e6698a07380cd31a736d248a3f2a50a7c88779a1813da27503cadc2a/contourpy-1.3.3.tar.gz", hash = "sha256:083e12155b210502d0bca491432bb04d56dc3432f95a979b429f2848c3dbe880", size = 13466174, upload-time = "2025-07-26T12:03:12.549Z" }
 wheels = [
@@ -629,37 +635,37 @@ wheels = [
 
 [package.optional-dependencies]
 cublas = [
-    { name = "nvidia-cublas-cu12", marker = "(python_full_version < '3.11' and sys_platform == 'win32') or (python_full_version >= '3.11' and extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5') or sys_platform == 'linux' or (sys_platform != 'win32' and extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "nvidia-cublas-cu12", marker = "(python_full_version < '3.11' and sys_platform == 'win32') or (python_full_version >= '3.11' and extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (python_full_version >= '3.11' and extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (python_full_version >= '3.11' and extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5') or sys_platform == 'linux' or (sys_platform != 'win32' and extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (sys_platform != 'win32' and extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (sys_platform != 'win32' and extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
 ]
 cudart = [
-    { name = "nvidia-cuda-runtime-cu12", marker = "(python_full_version < '3.11' and sys_platform == 'win32') or (python_full_version >= '3.11' and extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5') or sys_platform == 'linux' or (sys_platform != 'win32' and extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "nvidia-cuda-runtime-cu12", marker = "(python_full_version < '3.11' and sys_platform == 'win32') or (python_full_version >= '3.11' and extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (python_full_version >= '3.11' and extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (python_full_version >= '3.11' and extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5') or sys_platform == 'linux' or (sys_platform != 'win32' and extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (sys_platform != 'win32' and extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (sys_platform != 'win32' and extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
 ]
 cufft = [
-    { name = "nvidia-cufft-cu12", marker = "(python_full_version < '3.11' and sys_platform == 'win32') or (python_full_version >= '3.11' and extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5') or sys_platform == 'linux' or (sys_platform != 'win32' and extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "nvidia-cufft-cu12", marker = "(python_full_version < '3.11' and sys_platform == 'win32') or (python_full_version >= '3.11' and extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (python_full_version >= '3.11' and extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (python_full_version >= '3.11' and extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5') or sys_platform == 'linux' or (sys_platform != 'win32' and extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (sys_platform != 'win32' and extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (sys_platform != 'win32' and extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
 ]
 cufile = [
-    { name = "nvidia-cufile-cu12", marker = "sys_platform == 'linux' or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "nvidia-cufile-cu12", marker = "sys_platform == 'linux' or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
 ]
 cupti = [
-    { name = "nvidia-cuda-cupti-cu12", marker = "(python_full_version < '3.11' and sys_platform == 'win32') or (python_full_version >= '3.11' and extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5') or sys_platform == 'linux' or (sys_platform != 'win32' and extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "nvidia-cuda-cupti-cu12", marker = "(python_full_version < '3.11' and sys_platform == 'win32') or (python_full_version >= '3.11' and extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (python_full_version >= '3.11' and extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (python_full_version >= '3.11' and extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5') or sys_platform == 'linux' or (sys_platform != 'win32' and extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (sys_platform != 'win32' and extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (sys_platform != 'win32' and extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
 ]
 curand = [
-    { name = "nvidia-curand-cu12", marker = "(python_full_version < '3.11' and sys_platform == 'win32') or (python_full_version >= '3.11' and extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5') or sys_platform == 'linux' or (sys_platform != 'win32' and extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "nvidia-curand-cu12", marker = "(python_full_version < '3.11' and sys_platform == 'win32') or (python_full_version >= '3.11' and extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (python_full_version >= '3.11' and extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (python_full_version >= '3.11' and extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5') or sys_platform == 'linux' or (sys_platform != 'win32' and extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (sys_platform != 'win32' and extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (sys_platform != 'win32' and extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
 ]
 cusolver = [
-    { name = "nvidia-cusolver-cu12", marker = "(python_full_version < '3.11' and sys_platform == 'win32') or (python_full_version >= '3.11' and extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5') or sys_platform == 'linux' or (sys_platform != 'win32' and extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "nvidia-cusolver-cu12", marker = "(python_full_version < '3.11' and sys_platform == 'win32') or (python_full_version >= '3.11' and extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (python_full_version >= '3.11' and extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (python_full_version >= '3.11' and extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5') or sys_platform == 'linux' or (sys_platform != 'win32' and extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (sys_platform != 'win32' and extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (sys_platform != 'win32' and extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
 ]
 cusparse = [
-    { name = "nvidia-cusparse-cu12", marker = "(python_full_version < '3.11' and sys_platform == 'win32') or (python_full_version >= '3.11' and extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5') or sys_platform == 'linux' or (sys_platform != 'win32' and extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "nvidia-cusparse-cu12", marker = "(python_full_version < '3.11' and sys_platform == 'win32') or (python_full_version >= '3.11' and extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (python_full_version >= '3.11' and extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (python_full_version >= '3.11' and extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5') or sys_platform == 'linux' or (sys_platform != 'win32' and extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (sys_platform != 'win32' and extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (sys_platform != 'win32' and extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
 ]
 nvjitlink = [
-    { name = "nvidia-nvjitlink-cu12", marker = "(python_full_version < '3.11' and sys_platform == 'win32') or (python_full_version >= '3.11' and extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5') or sys_platform == 'linux' or (sys_platform != 'win32' and extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "nvidia-nvjitlink-cu12", marker = "(python_full_version < '3.11' and sys_platform == 'win32') or (python_full_version >= '3.11' and extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (python_full_version >= '3.11' and extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (python_full_version >= '3.11' and extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5') or sys_platform == 'linux' or (sys_platform != 'win32' and extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (sys_platform != 'win32' and extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (sys_platform != 'win32' and extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
 ]
 nvrtc = [
-    { name = "nvidia-cuda-nvrtc-cu12", marker = "(python_full_version < '3.11' and sys_platform == 'win32') or (python_full_version >= '3.11' and extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5') or sys_platform == 'linux' or (sys_platform != 'win32' and extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "nvidia-cuda-nvrtc-cu12", marker = "(python_full_version < '3.11' and sys_platform == 'win32') or (python_full_version >= '3.11' and extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (python_full_version >= '3.11' and extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (python_full_version >= '3.11' and extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5') or sys_platform == 'linux' or (sys_platform != 'win32' and extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (sys_platform != 'win32' and extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (sys_platform != 'win32' and extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
 ]
 nvtx = [
-    { name = "nvidia-nvtx-cu12", marker = "(python_full_version < '3.11' and sys_platform == 'win32') or (python_full_version >= '3.11' and extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5') or sys_platform == 'linux' or (sys_platform != 'win32' and extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "nvidia-nvtx-cu12", marker = "(python_full_version < '3.11' and sys_platform == 'win32') or (python_full_version >= '3.11' and extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (python_full_version >= '3.11' and extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (python_full_version >= '3.11' and extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5') or sys_platform == 'linux' or (sys_platform != 'win32' and extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (sys_platform != 'win32' and extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (sys_platform != 'win32' and extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
 ]
 
 [[package]]
@@ -682,12 +688,12 @@ dependencies = [
     { name = "httpx" },
     { name = "huggingface-hub" },
     { name = "multiprocess" },
-    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
-    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*' or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
-    { name = "numpy", version = "2.5.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12' or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*' or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "numpy", version = "2.5.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12' or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
     { name = "packaging" },
-    { name = "pandas", version = "2.3.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
-    { name = "pandas", version = "3.0.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11' or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "pandas", version = "2.3.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "pandas", version = "3.0.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11' or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
     { name = "pyarrow" },
     { name = "pyyaml" },
     { name = "requests" },
@@ -722,7 +728,7 @@ name = "exceptiongroup"
 version = "1.3.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "typing-extensions", marker = "python_full_version < '3.11' or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "typing-extensions", marker = "python_full_version < '3.11' or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/50/79/66800aadf48771f6b62f7eb014e352e5d06856655206165d775e675a02c9/exceptiongroup-1.3.1.tar.gz", hash = "sha256:8b412432c6055b0b7d14c310000ae93352ed6754f70fa8f7c34141f91c4e3219", size = 30371, upload-time = "2025-11-21T23:01:54.787Z" }
 wheels = [
@@ -738,9 +744,9 @@ dependencies = [
     { name = "filelock" },
     { name = "joblib" },
     { name = "maturin" },
-    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.11' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
-    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version == '3.11.*' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
-    { name = "numpy", version = "2.5.0", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.12' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.11' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version == '3.11.*' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "numpy", version = "2.5.0", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.12' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5')" },
     { name = "setuptools" },
     { name = "torch" },
     { name = "usearch" },
@@ -768,9 +774,9 @@ name = "fastkmeans"
 version = "0.5.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.11' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
-    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version == '3.11.*' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
-    { name = "numpy", version = "2.5.0", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.12' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.11' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version == '3.11.*' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "numpy", version = "2.5.0", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.12' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5')" },
     { name = "torch" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/08/b5/2ccaf75530a5250825bd5f3c100492e39c43cf2bea84d1bf7ae3def10a85/fastkmeans-0.5.0.tar.gz", hash = "sha256:64196ba228bfa02a98358ee4d30e5af33ddf1aa44cd72e93428916d0e5d2167f", size = 17010, upload-time = "2025-05-14T05:52:38.613Z" }
@@ -808,16 +814,16 @@ dependencies = [
     { name = "torch" },
 ]
 wheels = [
-    { url = "https://wheels.astral.sh/artifacts/1bfb5b9b508d22989f3f892610cb1a12d129b145c7bff36d0297db9e88e670dc/flash_attn-2.8.3.post1+cu.12.8.torch.2.11-cp310-cp310-manylinux_2_24_aarch64.whl", hash = "sha256:1bfb5b9b508d22989f3f892610cb1a12d129b145c7bff36d0297db9e88e670dc", size = 253521058, upload-time = "2026-06-23T17:59:04Z" },
-    { url = "https://wheels.astral.sh/artifacts/b88d799a16d0097de5ee062c8843fc145f07d9128f4297378815143b74540420/flash_attn-2.8.3.post1+cu.12.8.torch.2.11-cp310-cp310-manylinux_2_24_x86_64.whl", hash = "sha256:b88d799a16d0097de5ee062c8843fc145f07d9128f4297378815143b74540420", size = 253647198, upload-time = "2026-06-23T17:59:04Z" },
-    { url = "https://wheels.astral.sh/artifacts/74ea2db9ef094499c93ff45a25890140dc8ab8d41eb53cf9f66c3c811e5696a4/flash_attn-2.8.3.post1+cu.12.8.torch.2.11-cp311-cp311-manylinux_2_24_aarch64.whl", hash = "sha256:74ea2db9ef094499c93ff45a25890140dc8ab8d41eb53cf9f66c3c811e5696a4", size = 253532224, upload-time = "2026-06-23T17:59:04Z" },
-    { url = "https://wheels.astral.sh/artifacts/6cb7d17b5a0724b73a14ef93b44d335c971d79f1deb9183abb590c558c1aa1fe/flash_attn-2.8.3.post1+cu.12.8.torch.2.11-cp311-cp311-manylinux_2_24_x86_64.whl", hash = "sha256:6cb7d17b5a0724b73a14ef93b44d335c971d79f1deb9183abb590c558c1aa1fe", size = 253659326, upload-time = "2026-06-23T17:59:06Z" },
-    { url = "https://wheels.astral.sh/artifacts/69eef32e4db84b422574c4f04e667bbfd77146173840a061b21249e6b394995b/flash_attn-2.8.3.post1+cu.12.8.torch.2.11-cp312-cp312-manylinux_2_24_aarch64.whl", hash = "sha256:69eef32e4db84b422574c4f04e667bbfd77146173840a061b21249e6b394995b", size = 253534783, upload-time = "2026-06-23T17:59:06Z" },
-    { url = "https://wheels.astral.sh/artifacts/2925febe8cd3d5e6f8771cf570058522a38f68e1f55efedda0d250beef7eca14/flash_attn-2.8.3.post1+cu.12.8.torch.2.11-cp312-cp312-manylinux_2_24_x86_64.whl", hash = "sha256:2925febe8cd3d5e6f8771cf570058522a38f68e1f55efedda0d250beef7eca14", size = 253665040, upload-time = "2026-06-23T17:59:11Z" },
-    { url = "https://wheels.astral.sh/artifacts/7cc0a0246fc2a8ab2348d1c1882f24e7e89558acfa5146a9c4bc18aa9b2edfc6/flash_attn-2.8.3.post1+cu.12.8.torch.2.11-cp313-cp313-manylinux_2_24_aarch64.whl", hash = "sha256:7cc0a0246fc2a8ab2348d1c1882f24e7e89558acfa5146a9c4bc18aa9b2edfc6", size = 253535402, upload-time = "2026-06-23T17:59:11Z" },
-    { url = "https://wheels.astral.sh/artifacts/4d89ac6aa5db7a1cd7a503c6f887fbdb66d0e3e40dc524ea7610ba054f834873/flash_attn-2.8.3.post1+cu.12.8.torch.2.11-cp313-cp313-manylinux_2_24_x86_64.whl", hash = "sha256:4d89ac6aa5db7a1cd7a503c6f887fbdb66d0e3e40dc524ea7610ba054f834873", size = 253666579, upload-time = "2026-06-23T17:59:13Z" },
-    { url = "https://wheels.astral.sh/artifacts/f8553c66ec5f4d9776d0deedcd93df3b51bf07fc920235ba67d59ce0b8ce1829/flash_attn-2.8.3.post1+cu.12.8.torch.2.11-cp314-cp314-manylinux_2_24_aarch64.whl", hash = "sha256:f8553c66ec5f4d9776d0deedcd93df3b51bf07fc920235ba67d59ce0b8ce1829", size = 253535031, upload-time = "2026-06-23T17:59:13Z" },
-    { url = "https://wheels.astral.sh/artifacts/cd4797c9c5861034ed445c30c74eaf1dcadae4619ee24a967adfd712da269149/flash_attn-2.8.3.post1+cu.12.8.torch.2.11-cp314-cp314-manylinux_2_24_x86_64.whl", hash = "sha256:cd4797c9c5861034ed445c30c74eaf1dcadae4619ee24a967adfd712da269149", size = 253665057, upload-time = "2026-06-23T17:59:14Z" },
+    { url = "https://wheels.astral.sh/artifacts/1c0daafbc98c10857f846f3b3ecbdd7228ad04357ce9100217ea03940c1e8f79/flash_attn-2.8.3.post1+cu.12.8.torch.2.11-cp310-cp310-manylinux_2_24_aarch64.whl", hash = "sha256:1c0daafbc98c10857f846f3b3ecbdd7228ad04357ce9100217ea03940c1e8f79", size = 253521117, upload-time = "2026-10-03T18:48:32Z" },
+    { url = "https://wheels.astral.sh/artifacts/3ede5ee6a1247db6a18fe4ab47fb15d02853ce871ee17998e2f44b6824a8331d/flash_attn-2.8.3.post1+cu.12.8.torch.2.11-cp310-cp310-manylinux_2_24_x86_64.whl", hash = "sha256:3ede5ee6a1247db6a18fe4ab47fb15d02853ce871ee17998e2f44b6824a8331d", size = 253647219, upload-time = "2026-10-03T18:48:33Z" },
+    { url = "https://wheels.astral.sh/artifacts/6bc664e10754a40a6ed360c004bb0458dff4dc00104179047ed55318ebdc204b/flash_attn-2.8.3.post1+cu.12.8.torch.2.11-cp311-cp311-manylinux_2_24_aarch64.whl", hash = "sha256:6bc664e10754a40a6ed360c004bb0458dff4dc00104179047ed55318ebdc204b", size = 253532290, upload-time = "2026-10-03T18:48:34Z" },
+    { url = "https://wheels.astral.sh/artifacts/71ec6ffb5bde0d2beddae3a68e42a036504cf92be51e9c57acb5181756d700aa/flash_attn-2.8.3.post1+cu.12.8.torch.2.11-cp311-cp311-manylinux_2_24_x86_64.whl", hash = "sha256:71ec6ffb5bde0d2beddae3a68e42a036504cf92be51e9c57acb5181756d700aa", size = 253659642, upload-time = "2026-10-03T18:48:35Z" },
+    { url = "https://wheels.astral.sh/artifacts/1a13939fd40db1fdceb30b420037da0f778fbbaaf0be39db83d9a74ff3af0044/flash_attn-2.8.3.post1+cu.12.8.torch.2.11-cp312-cp312-manylinux_2_24_aarch64.whl", hash = "sha256:1a13939fd40db1fdceb30b420037da0f778fbbaaf0be39db83d9a74ff3af0044", size = 253535006, upload-time = "2026-10-03T18:48:36Z" },
+    { url = "https://wheels.astral.sh/artifacts/a50d3d6d300bee531f9068c42a83aedfeb1bc8dac50a813ab4a8abe8037df955/flash_attn-2.8.3.post1+cu.12.8.torch.2.11-cp312-cp312-manylinux_2_24_x86_64.whl", hash = "sha256:a50d3d6d300bee531f9068c42a83aedfeb1bc8dac50a813ab4a8abe8037df955", size = 253665229, upload-time = "2026-10-03T18:48:43Z" },
+    { url = "https://wheels.astral.sh/artifacts/8d1f0055d4b5e259c1cb6a04f5e406d171807a182eddfbe2e2518dc0d56f104b/flash_attn-2.8.3.post1+cu.12.8.torch.2.11-cp313-cp313-manylinux_2_24_aarch64.whl", hash = "sha256:8d1f0055d4b5e259c1cb6a04f5e406d171807a182eddfbe2e2518dc0d56f104b", size = 253535756, upload-time = "2026-10-03T18:48:45Z" },
+    { url = "https://wheels.astral.sh/artifacts/3b2639372c39d4b0dcce3c6315ff7ba1e566ad3b34c59810973ccf7fb498a9b4/flash_attn-2.8.3.post1+cu.12.8.torch.2.11-cp313-cp313-manylinux_2_24_x86_64.whl", hash = "sha256:3b2639372c39d4b0dcce3c6315ff7ba1e566ad3b34c59810973ccf7fb498a9b4", size = 253666641, upload-time = "2026-10-03T18:48:46Z" },
+    { url = "https://wheels.astral.sh/artifacts/c0f48bd2b7b7d918e46f9ce9df8c103a27a9b350a9c6b627a87cdb4866dabb15/flash_attn-2.8.3.post1+cu.12.8.torch.2.11-cp314-cp314-manylinux_2_24_aarch64.whl", hash = "sha256:c0f48bd2b7b7d918e46f9ce9df8c103a27a9b350a9c6b627a87cdb4866dabb15", size = 253535020, upload-time = "2026-10-03T18:48:46Z" },
+    { url = "https://wheels.astral.sh/artifacts/c5dec242aa433e62ce5670c60703395c364c2d9bb2d383387c3b5f0bf2319311/flash_attn-2.8.3.post1+cu.12.8.torch.2.11-cp314-cp314-manylinux_2_24_x86_64.whl", hash = "sha256:c5dec242aa433e62ce5670c60703395c364c2d9bb2d383387c3b5f0bf2319311", size = 253665287, upload-time = "2026-10-03T18:48:46Z" },
 ]
 
 [[package]]
@@ -1121,11 +1127,11 @@ dependencies = [
     { name = "click" },
     { name = "filelock" },
     { name = "fsspec" },
-    { name = "hf-xet", marker = "platform_machine == 'AMD64' or platform_machine == 'aarch64' or platform_machine == 'amd64' or platform_machine == 'arm64' or platform_machine == 'x86_64' or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "hf-xet", marker = "platform_machine == 'AMD64' or platform_machine == 'aarch64' or platform_machine == 'amd64' or platform_machine == 'arm64' or platform_machine == 'x86_64' or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
     { name = "httpx" },
     { name = "packaging" },
     { name = "pyyaml" },
-    { name = "tomli", marker = "python_full_version < '3.11' or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "tomli", marker = "python_full_version < '3.11' or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
     { name = "tqdm" },
     { name = "typing-extensions" },
 ]
@@ -1402,15 +1408,15 @@ resolution-markers = [
     "python_full_version < '3.11'",
 ]
 dependencies = [
-    { name = "contourpy", version = "1.3.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
-    { name = "cycler", marker = "python_full_version < '3.11' or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
-    { name = "fonttools", marker = "python_full_version < '3.11' or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
-    { name = "kiwisolver", marker = "python_full_version < '3.11' or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
-    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
-    { name = "packaging", marker = "python_full_version < '3.11' or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
-    { name = "pillow", marker = "python_full_version < '3.11' or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
-    { name = "pyparsing", marker = "python_full_version < '3.11' or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
-    { name = "python-dateutil", marker = "python_full_version < '3.11' or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "contourpy", version = "1.3.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "cycler", marker = "python_full_version < '3.11' or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "fonttools", marker = "python_full_version < '3.11' or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "kiwisolver", marker = "python_full_version < '3.11' or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "packaging", marker = "python_full_version < '3.11' or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "pillow", marker = "python_full_version < '3.11' or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "pyparsing", marker = "python_full_version < '3.11' or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "python-dateutil", marker = "python_full_version < '3.11' or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/63/1b/4be5be87d43d327a0cf4de1a56e86f7f84c89312452406cf122efe2839e6/matplotlib-3.10.9.tar.gz", hash = "sha256:fd66508e8c6877d98e586654b608a0456db8d7e8a546eb1e2600efd957302358", size = 34811233, upload-time = "2026-04-24T00:14:13.539Z" }
 wheels = [
@@ -1486,16 +1492,16 @@ resolution-markers = [
     "python_full_version == '3.11.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
 ]
 dependencies = [
-    { name = "contourpy", version = "1.3.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11' or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
-    { name = "cycler", marker = "python_full_version >= '3.11' or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
-    { name = "fonttools", marker = "python_full_version >= '3.11' or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
-    { name = "kiwisolver", marker = "python_full_version >= '3.11' or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
-    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*' or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
-    { name = "numpy", version = "2.5.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12' or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
-    { name = "packaging", marker = "python_full_version >= '3.11' or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
-    { name = "pillow", marker = "python_full_version >= '3.11' or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
-    { name = "pyparsing", marker = "python_full_version >= '3.11' or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
-    { name = "python-dateutil", marker = "python_full_version >= '3.11' or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "contourpy", version = "1.3.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11' or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "cycler", marker = "python_full_version >= '3.11' or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "fonttools", marker = "python_full_version >= '3.11' or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "kiwisolver", marker = "python_full_version >= '3.11' or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*' or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "numpy", version = "2.5.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12' or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "packaging", marker = "python_full_version >= '3.11' or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "pillow", marker = "python_full_version >= '3.11' or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "pyparsing", marker = "python_full_version >= '3.11' or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "python-dateutil", marker = "python_full_version >= '3.11' or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/49/64/f9a391af28f518b11ad45a8a712353c94a0aefce09d3703200e5c54b610a/matplotlib-3.11.1.tar.gz", hash = "sha256:69647db5746941c793d6e445a4cd349323ffb87d9cc958c2ad84a659b4832d30", size = 32612045, upload-time = "2026-07-18T03:39:46.63Z" }
 wheels = [
@@ -1593,7 +1599,7 @@ name = "multidict"
 version = "6.7.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "typing-extensions", marker = "python_full_version < '3.11' or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "typing-extensions", marker = "python_full_version < '3.11' or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/1a/c2/c2d94cbe6ac1753f3fc980da97b3d930efe1da3af3c9f5125354436c073d/multidict-6.7.1.tar.gz", hash = "sha256:ec6652a1bee61c53a3e5776b6049172c53b6aaba34f18c9ad04f82712bac623d", size = 102010, upload-time = "2026-01-26T02:46:45.979Z" }
 wheels = [
@@ -2173,7 +2179,7 @@ name = "nvidia-cudnn-cu12"
 version = "9.19.0.56"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "nvidia-cublas-cu12", marker = "(python_full_version < '3.11' and sys_platform == 'emscripten') or (python_full_version < '3.11' and sys_platform == 'win32') or (sys_platform != 'emscripten' and sys_platform != 'win32') or (sys_platform == 'emscripten' and extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5') or (sys_platform == 'win32' and extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "nvidia-cublas-cu12", marker = "(python_full_version < '3.11' and sys_platform == 'emscripten') or (python_full_version < '3.11' and sys_platform == 'win32') or (sys_platform != 'emscripten' and sys_platform != 'win32') or (sys_platform == 'emscripten' and extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (sys_platform == 'emscripten' and extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (sys_platform == 'emscripten' and extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5') or (sys_platform == 'win32' and extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (sys_platform == 'win32' and extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (sys_platform == 'win32' and extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/09/b8/277c51962ee46fa3e5b203ac5f76107c650f781d6891e681e28e6f3e9fe6/nvidia_cudnn_cu12-9.19.0.56-py3-none-manylinux_2_27_aarch64.whl", hash = "sha256:08caaf27fe556aca82a3ee3b5aa49a77e7de0cfcb7ff4e5c29da426387a8267e", size = 656910700, upload-time = "2026-02-03T20:40:25.508Z" },
@@ -2186,7 +2192,7 @@ name = "nvidia-cufft-cu12"
 version = "11.3.3.83"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "nvidia-nvjitlink-cu12", marker = "(python_full_version < '3.11' and sys_platform == 'emscripten') or (python_full_version < '3.11' and sys_platform == 'win32') or (sys_platform != 'emscripten' and sys_platform != 'win32') or (sys_platform == 'emscripten' and extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5') or (sys_platform == 'win32' and extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "nvidia-nvjitlink-cu12", marker = "(python_full_version < '3.11' and sys_platform == 'emscripten') or (python_full_version < '3.11' and sys_platform == 'win32') or (sys_platform != 'emscripten' and sys_platform != 'win32') or (sys_platform == 'emscripten' and extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (sys_platform == 'emscripten' and extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (sys_platform == 'emscripten' and extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5') or (sys_platform == 'win32' and extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (sys_platform == 'win32' and extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (sys_platform == 'win32' and extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/60/bc/7771846d3a0272026c416fbb7e5f4c1f146d6d80704534d0b187dd6f4800/nvidia_cufft_cu12-11.3.3.83-py3-none-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:848ef7224d6305cdb2a4df928759dca7b1201874787083b6e7550dd6765ce69a", size = 193109211, upload-time = "2025-03-07T01:44:56.873Z" },
@@ -2218,9 +2224,9 @@ name = "nvidia-cusolver-cu12"
 version = "11.7.3.90"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "nvidia-cublas-cu12", marker = "(python_full_version < '3.11' and sys_platform == 'emscripten') or (python_full_version < '3.11' and sys_platform == 'win32') or (sys_platform != 'emscripten' and sys_platform != 'win32') or (sys_platform == 'emscripten' and extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5') or (sys_platform == 'win32' and extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
-    { name = "nvidia-cusparse-cu12", marker = "(python_full_version < '3.11' and sys_platform == 'emscripten') or (python_full_version < '3.11' and sys_platform == 'win32') or (sys_platform != 'emscripten' and sys_platform != 'win32') or (sys_platform == 'emscripten' and extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5') or (sys_platform == 'win32' and extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
-    { name = "nvidia-nvjitlink-cu12", marker = "(python_full_version < '3.11' and sys_platform == 'emscripten') or (python_full_version < '3.11' and sys_platform == 'win32') or (sys_platform != 'emscripten' and sys_platform != 'win32') or (sys_platform == 'emscripten' and extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5') or (sys_platform == 'win32' and extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "nvidia-cublas-cu12", marker = "(python_full_version < '3.11' and sys_platform == 'emscripten') or (python_full_version < '3.11' and sys_platform == 'win32') or (sys_platform != 'emscripten' and sys_platform != 'win32') or (sys_platform == 'emscripten' and extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (sys_platform == 'emscripten' and extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (sys_platform == 'emscripten' and extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5') or (sys_platform == 'win32' and extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (sys_platform == 'win32' and extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (sys_platform == 'win32' and extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "nvidia-cusparse-cu12", marker = "(python_full_version < '3.11' and sys_platform == 'emscripten') or (python_full_version < '3.11' and sys_platform == 'win32') or (sys_platform != 'emscripten' and sys_platform != 'win32') or (sys_platform == 'emscripten' and extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (sys_platform == 'emscripten' and extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (sys_platform == 'emscripten' and extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5') or (sys_platform == 'win32' and extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (sys_platform == 'win32' and extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (sys_platform == 'win32' and extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "nvidia-nvjitlink-cu12", marker = "(python_full_version < '3.11' and sys_platform == 'emscripten') or (python_full_version < '3.11' and sys_platform == 'win32') or (sys_platform != 'emscripten' and sys_platform != 'win32') or (sys_platform == 'emscripten' and extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (sys_platform == 'emscripten' and extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (sys_platform == 'emscripten' and extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5') or (sys_platform == 'win32' and extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (sys_platform == 'win32' and extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (sys_platform == 'win32' and extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/c8/32/f7cd6ce8a7690544d084ea21c26e910a97e077c9b7f07bf5de623ee19981/nvidia_cusolver_cu12-11.7.3.90-py3-none-manylinux_2_27_aarch64.whl", hash = "sha256:db9ed69dbef9715071232caa9b69c52ac7de3a95773c2db65bdba85916e4e5c0", size = 267229841, upload-time = "2025-03-07T01:46:54.356Z" },
@@ -2233,7 +2239,7 @@ name = "nvidia-cusparse-cu12"
 version = "12.5.8.93"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "nvidia-nvjitlink-cu12", marker = "(python_full_version < '3.11' and sys_platform == 'emscripten') or (python_full_version < '3.11' and sys_platform == 'win32') or (sys_platform != 'emscripten' and sys_platform != 'win32') or (sys_platform == 'emscripten' and extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5') or (sys_platform == 'win32' and extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "nvidia-nvjitlink-cu12", marker = "(python_full_version < '3.11' and sys_platform == 'emscripten') or (python_full_version < '3.11' and sys_platform == 'win32') or (sys_platform != 'emscripten' and sys_platform != 'win32') or (sys_platform == 'emscripten' and extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (sys_platform == 'emscripten' and extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (sys_platform == 'emscripten' and extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5') or (sys_platform == 'win32' and extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (sys_platform == 'win32' and extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (sys_platform == 'win32' and extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/bc/f7/cd777c4109681367721b00a106f491e0d0d15cfa1fd59672ce580ce42a97/nvidia_cusparse_cu12-12.5.8.93-py3-none-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:9b6c161cb130be1a07a27ea6923df8141f3c295852f4b260c65f18f3e0a091dc", size = 288117129, upload-time = "2025-03-07T01:47:40.407Z" },
@@ -2268,9 +2274,9 @@ version = "4.5.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "cuda-python" },
-    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
-    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*' or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
-    { name = "numpy", version = "2.5.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12' or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*' or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "numpy", version = "2.5.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12' or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
     { name = "typing-extensions" },
 ]
 wheels = [
@@ -2342,12 +2348,17 @@ source = { editable = "." }
 dependencies = [
     { name = "nvidia-cutlass-dsl" },
     { name = "torch" },
-    { name = "transformers", version = "5.3.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-15-packed-encoders-pylate'" },
-    { name = "transformers", version = "5.9.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-15-packed-encoders-qwen3-5' or extra != 'extra-15-packed-encoders-pylate'" },
+    { name = "transformers", version = "5.3.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-15-packed-encoders-pylate' or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "transformers", version = "5.9.0", source = { registry = "https://pypi.org/simple" }, marker = "(extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra != 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra != 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "transformers", version = "5.19.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-15-packed-encoders-embedding-gemma2' or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra != 'extra-15-packed-encoders-pylate' and extra != 'extra-15-packed-encoders-qwen3-5')" },
     { name = "triton" },
 ]
 
 [package.optional-dependencies]
+embedding-gemma2 = [
+    { name = "timm" },
+    { name = "transformers", version = "5.19.0", source = { registry = "https://pypi.org/simple" } },
+]
 fa2 = [
     { name = "flash-attn" },
 ]
@@ -2364,24 +2375,24 @@ qwen3-5 = [
     { name = "transformers", version = "5.9.0", source = { registry = "https://pypi.org/simple" } },
 ]
 sentence-transformers = [
-    { name = "sentence-transformers", version = "5.3.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-15-packed-encoders-pylate'" },
-    { name = "sentence-transformers", version = "6.1.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-15-packed-encoders-qwen3-5' or extra != 'extra-15-packed-encoders-pylate'" },
+    { name = "sentence-transformers", version = "5.3.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-15-packed-encoders-pylate' or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "sentence-transformers", version = "6.1.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-15-packed-encoders-embedding-gemma2' or extra != 'extra-15-packed-encoders-pylate' or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
 ]
 
 [package.dev-dependencies]
 dev = [
     { name = "datasets" },
     { name = "flash-maxsim" },
-    { name = "matplotlib", version = "3.10.9", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
-    { name = "matplotlib", version = "3.11.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11' or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
-    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
-    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*' or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
-    { name = "numpy", version = "2.5.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12' or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "matplotlib", version = "3.10.9", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "matplotlib", version = "3.11.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11' or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*' or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "numpy", version = "2.5.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12' or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
     { name = "pytest" },
     { name = "pyyaml" },
-    { name = "scipy", version = "1.15.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
-    { name = "scipy", version = "1.17.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*' or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
-    { name = "scipy", version = "1.18.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12' or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "scipy", version = "1.15.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "scipy", version = "1.17.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*' or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "scipy", version = "1.18.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12' or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
 ]
 test = [
     { name = "pytest" },
@@ -2396,13 +2407,15 @@ requires-dist = [
     { name = "pylate", marker = "extra == 'pylate'", specifier = ">=1.5" },
     { name = "sentence-transformers", marker = "extra == 'qwen3-5'", specifier = ">=6.1,<7" },
     { name = "sentence-transformers", marker = "extra == 'sentence-transformers'", specifier = ">=3.0" },
+    { name = "timm", marker = "extra == 'embedding-gemma2'", specifier = ">=1.0" },
     { name = "torch", specifier = ">=2.11,<2.12", index = "https://download.pytorch.org/whl/cu128" },
     { name = "torchvision", marker = "extra == 'qwen3-5'", specifier = ">=0.26,<0.27", index = "https://download.pytorch.org/whl/cu128" },
-    { name = "transformers", specifier = ">=4.45,<5.10" },
+    { name = "transformers", specifier = ">=4.45,<5.20" },
+    { name = "transformers", marker = "extra == 'embedding-gemma2'", specifier = ">=5.19,<5.20" },
     { name = "transformers", marker = "extra == 'qwen3-5'", specifier = ">=5.9,<5.10" },
     { name = "triton", specifier = ">=3.6,<3.7" },
 ]
-provides-extras = ["sentence-transformers", "pylate", "fa2", "fa4", "qwen3-5"]
+provides-extras = ["sentence-transformers", "pylate", "fa2", "fa4", "qwen3-5", "embedding-gemma2"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -2424,10 +2437,10 @@ resolution-markers = [
     "python_full_version < '3.11'",
 ]
 dependencies = [
-    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
-    { name = "python-dateutil", marker = "python_full_version < '3.11' or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
-    { name = "pytz", marker = "python_full_version < '3.11' or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
-    { name = "tzdata", marker = "python_full_version < '3.11' or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "python-dateutil", marker = "python_full_version < '3.11' or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "pytz", marker = "python_full_version < '3.11' or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "tzdata", marker = "python_full_version < '3.11' or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/33/01/d40b85317f86cf08d853a4f495195c73815fdf205eef3993821720274518/pandas-2.3.3.tar.gz", hash = "sha256:e05e1af93b977f7eafa636d043f9f94c7ee3ac81af99c13508215942e64c993b", size = 4495223, upload-time = "2025-09-29T23:34:51.853Z" }
 wheels = [
@@ -2496,10 +2509,10 @@ resolution-markers = [
     "python_full_version == '3.11.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
 ]
 dependencies = [
-    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*' or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
-    { name = "numpy", version = "2.5.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12' or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
-    { name = "python-dateutil", marker = "python_full_version >= '3.11' or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
-    { name = "tzdata", marker = "(python_full_version >= '3.11' and sys_platform == 'emscripten') or (python_full_version >= '3.11' and sys_platform == 'win32') or (sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5') or (sys_platform == 'emscripten' and extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5') or (sys_platform == 'win32' and extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*' or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "numpy", version = "2.5.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12' or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "python-dateutil", marker = "python_full_version >= '3.11' or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "tzdata", marker = "(python_full_version >= '3.11' and sys_platform == 'emscripten') or (python_full_version >= '3.11' and sys_platform == 'win32') or (sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5') or (sys_platform == 'emscripten' and extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (sys_platform == 'emscripten' and extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (sys_platform == 'emscripten' and extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5') or (sys_platform == 'win32' and extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (sys_platform == 'win32' and extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (sys_platform == 'win32' and extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/f8/87/4341c6252d1c47b08768c3d25ac487362bf403f0313ddae4a2a26c9b1b4c/pandas-3.0.3.tar.gz", hash = "sha256:696a4a00a2a2a35d4e5deb3fc946641b96c944f02230e4f76137fe35d806c4fc", size = 4651414, upload-time = "2026-05-11T18:54:29.21Z" }
 wheels = [
@@ -2866,8 +2879,8 @@ dependencies = [
     { name = "fast-plaid" },
     { name = "fastkmeans" },
     { name = "ninja" },
-    { name = "pandas", version = "2.3.3", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.11' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
-    { name = "pandas", version = "3.0.3", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.11' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "pandas", version = "2.3.3", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.11' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "pandas", version = "3.0.3", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.11' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5')" },
     { name = "sentence-transformers", version = "5.3.0", source = { registry = "https://pypi.org/simple" } },
     { name = "transformers", version = "5.3.0", source = { registry = "https://pypi.org/simple" } },
     { name = "ujson" },
@@ -2891,13 +2904,13 @@ name = "pytest"
 version = "9.1.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "colorama", marker = "sys_platform == 'win32' or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
-    { name = "exceptiongroup", marker = "python_full_version < '3.11' or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "colorama", marker = "sys_platform == 'win32' or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "exceptiongroup", marker = "python_full_version < '3.11' or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
     { name = "iniconfig" },
     { name = "packaging" },
     { name = "pluggy" },
     { name = "pygments" },
-    { name = "tomli", marker = "python_full_version < '3.11' or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "tomli", marker = "python_full_version < '3.11' or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/e4/47/b9efed96c114afcfa3c9d3fe98a76a1d14c74a9e266d397cf6eb64be5e01/pytest-9.1.1.tar.gz", hash = "sha256:1088fbde8f2b49d95a549a195707afa7a76a3ce9bcadc26b6d71f0ffda5fe313", size = 1636369, upload-time = "2026-06-19T10:58:32.857Z" }
 wheels = [
@@ -3186,10 +3199,10 @@ resolution-markers = [
     "python_full_version < '3.11'",
 ]
 dependencies = [
-    { name = "joblib", marker = "python_full_version < '3.11' or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
-    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
-    { name = "scipy", version = "1.15.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
-    { name = "threadpoolctl", marker = "python_full_version < '3.11' or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "joblib", marker = "python_full_version < '3.11' or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "scipy", version = "1.15.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "threadpoolctl", marker = "python_full_version < '3.11' or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/98/c2/a7855e41c9d285dfe86dc50b250978105dce513d6e459ea66a6aeb0e1e0c/scikit_learn-1.7.2.tar.gz", hash = "sha256:20e9e49ecd130598f1ca38a1d85090e1a600147b9c02fa6f15d69cb53d968fda", size = 7193136, upload-time = "2025-09-09T08:21:29.075Z" }
 wheels = [
@@ -3241,13 +3254,13 @@ resolution-markers = [
     "python_full_version == '3.11.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
 ]
 dependencies = [
-    { name = "joblib", marker = "python_full_version >= '3.11' or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
-    { name = "narwhals", marker = "python_full_version >= '3.11' or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
-    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*' or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
-    { name = "numpy", version = "2.5.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12' or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
-    { name = "scipy", version = "1.17.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*' or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
-    { name = "scipy", version = "1.18.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12' or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
-    { name = "threadpoolctl", marker = "python_full_version >= '3.11' or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "joblib", marker = "python_full_version >= '3.11' or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "narwhals", marker = "python_full_version >= '3.11' or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*' or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "numpy", version = "2.5.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12' or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "scipy", version = "1.17.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*' or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "scipy", version = "1.18.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12' or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "threadpoolctl", marker = "python_full_version >= '3.11' or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/fa/6f/37092bdb25f712817231799fc5674d8e704066a8a70c1d2d40517e18b4ab/scikit_learn-1.9.0.tar.gz", hash = "sha256:8833266989d3a5110178a9fae30783675460724d0e1efb13b14901d2c660c557", size = 7750767, upload-time = "2026-06-02T11:54:32.706Z" }
 wheels = [
@@ -3291,7 +3304,7 @@ resolution-markers = [
     "python_full_version < '3.11'",
 ]
 dependencies = [
-    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/0f/37/6964b830433e654ec7485e45a00fc9a27cf868d622838f6b6d9c5ec0d532/scipy-1.15.3.tar.gz", hash = "sha256:eae3cf522bc7df64b42cad3925c876e1b0b6c35c1337c93e12c0f366f55b0eaf", size = 59419214, upload-time = "2025-05-08T16:13:05.955Z" }
 wheels = [
@@ -3352,7 +3365,7 @@ resolution-markers = [
     "python_full_version == '3.11.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
 ]
 dependencies = [
-    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*' or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*' or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/7a/97/5a3609c4f8d58b039179648e62dd220f89864f56f7357f5d4f45c29eb2cc/scipy-1.17.1.tar.gz", hash = "sha256:95d8e012d8cb8816c226aef832200b1d45109ed4464303e997c5b13122b297c0", size = 30573822, upload-time = "2026-02-23T00:26:24.851Z" }
 wheels = [
@@ -3431,7 +3444,7 @@ resolution-markers = [
     "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform != 'emscripten' and sys_platform != 'win32'",
 ]
 dependencies = [
-    { name = "numpy", version = "2.5.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12' or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "numpy", version = "2.5.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12' or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/a7/25/c2700dfaf6442b4effaa91af24ebce5dc9d31bb4a69706313aae70d72cd0/scipy-1.18.0.tar.gz", hash = "sha256:67b2ad2ad54c72ca6d04975a9b2df8c3638c34ddd5b28738e94fc2b57929d378", size = 30774447, upload-time = "2026-06-19T15:01:43.456Z" }
 wheels = [
@@ -3494,19 +3507,19 @@ resolution-markers = [
     "python_full_version < '3.11'",
 ]
 dependencies = [
-    { name = "huggingface-hub", marker = "extra == 'extra-15-packed-encoders-pylate'" },
-    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.11' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
-    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version == '3.11.*' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
-    { name = "numpy", version = "2.5.0", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.12' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
-    { name = "scikit-learn", version = "1.7.2", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.11' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
-    { name = "scikit-learn", version = "1.9.0", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.11' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
-    { name = "scipy", version = "1.15.3", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.11' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
-    { name = "scipy", version = "1.17.1", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version == '3.11.*' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
-    { name = "scipy", version = "1.18.0", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.12' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
-    { name = "torch", marker = "extra == 'extra-15-packed-encoders-pylate'" },
-    { name = "tqdm", marker = "extra == 'extra-15-packed-encoders-pylate'" },
-    { name = "transformers", version = "5.3.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-15-packed-encoders-pylate'" },
-    { name = "typing-extensions", marker = "extra == 'extra-15-packed-encoders-pylate'" },
+    { name = "huggingface-hub", marker = "extra == 'extra-15-packed-encoders-pylate' or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.11' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version == '3.11.*' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "numpy", version = "2.5.0", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.12' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "scikit-learn", version = "1.7.2", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.11' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "scikit-learn", version = "1.9.0", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.11' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "scipy", version = "1.15.3", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.11' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "scipy", version = "1.17.1", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version == '3.11.*' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "scipy", version = "1.18.0", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.12' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "torch", marker = "extra == 'extra-15-packed-encoders-pylate' or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "tqdm", marker = "extra == 'extra-15-packed-encoders-pylate' or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "transformers", version = "5.3.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-15-packed-encoders-pylate' or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "typing-extensions", marker = "extra == 'extra-15-packed-encoders-pylate' or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/fe/26/448453925b6ce0c29d8b54327caa71ee4835511aef02070467402273079c/sentence_transformers-5.3.0.tar.gz", hash = "sha256:414a0a881f53a4df0e6cbace75f823bfcb6b94d674c42a384b498959b7c065e2", size = 403330, upload-time = "2026-03-12T14:53:40.778Z" }
 wheels = [
@@ -3530,20 +3543,22 @@ resolution-markers = [
     "python_full_version < '3.11'",
 ]
 dependencies = [
-    { name = "huggingface-hub", marker = "extra == 'extra-15-packed-encoders-qwen3-5' or extra != 'extra-15-packed-encoders-pylate'" },
-    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.11' and extra != 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
-    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version == '3.11.*' and extra != 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
-    { name = "numpy", version = "2.5.0", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.12' and extra != 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
-    { name = "scikit-learn", version = "1.7.2", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.11' and extra != 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
-    { name = "scikit-learn", version = "1.9.0", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.11' and extra != 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
-    { name = "scipy", version = "1.15.3", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.11' and extra != 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
-    { name = "scipy", version = "1.17.1", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version == '3.11.*' and extra != 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
-    { name = "scipy", version = "1.18.0", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.12' and extra != 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
-    { name = "tokenizers", marker = "extra == 'extra-15-packed-encoders-qwen3-5' or extra != 'extra-15-packed-encoders-pylate'" },
-    { name = "torch", marker = "extra == 'extra-15-packed-encoders-qwen3-5' or extra != 'extra-15-packed-encoders-pylate'" },
-    { name = "tqdm", marker = "extra == 'extra-15-packed-encoders-qwen3-5' or extra != 'extra-15-packed-encoders-pylate'" },
-    { name = "transformers", version = "5.9.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-15-packed-encoders-qwen3-5' or extra != 'extra-15-packed-encoders-pylate'" },
-    { name = "typing-extensions", marker = "extra == 'extra-15-packed-encoders-qwen3-5' or extra != 'extra-15-packed-encoders-pylate'" },
+    { name = "huggingface-hub", marker = "extra == 'extra-15-packed-encoders-embedding-gemma2' or extra != 'extra-15-packed-encoders-pylate' or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.11' and extra == 'extra-15-packed-encoders-embedding-gemma2') or (python_full_version < '3.11' and extra != 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version == '3.11.*' and extra == 'extra-15-packed-encoders-embedding-gemma2') or (python_full_version == '3.11.*' and extra != 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "numpy", version = "2.5.0", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.12' and extra == 'extra-15-packed-encoders-embedding-gemma2') or (python_full_version >= '3.12' and extra != 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "scikit-learn", version = "1.7.2", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.11' and extra == 'extra-15-packed-encoders-embedding-gemma2') or (python_full_version < '3.11' and extra != 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "scikit-learn", version = "1.9.0", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.11' and extra == 'extra-15-packed-encoders-embedding-gemma2') or (python_full_version >= '3.11' and extra != 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "scipy", version = "1.15.3", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.11' and extra == 'extra-15-packed-encoders-embedding-gemma2') or (python_full_version < '3.11' and extra != 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "scipy", version = "1.17.1", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version == '3.11.*' and extra == 'extra-15-packed-encoders-embedding-gemma2') or (python_full_version == '3.11.*' and extra != 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "scipy", version = "1.18.0", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.12' and extra == 'extra-15-packed-encoders-embedding-gemma2') or (python_full_version >= '3.12' and extra != 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "tokenizers", version = "0.22.2", source = { registry = "https://pypi.org/simple" }, marker = "(extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra != 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra != 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "tokenizers", version = "0.23.3", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-15-packed-encoders-embedding-gemma2' or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra != 'extra-15-packed-encoders-pylate' and extra != 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "torch", marker = "extra == 'extra-15-packed-encoders-embedding-gemma2' or extra != 'extra-15-packed-encoders-pylate' or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "tqdm", marker = "extra == 'extra-15-packed-encoders-embedding-gemma2' or extra != 'extra-15-packed-encoders-pylate' or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "transformers", version = "5.9.0", source = { registry = "https://pypi.org/simple" }, marker = "(extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra != 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra != 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "transformers", version = "5.19.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-15-packed-encoders-embedding-gemma2' or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra != 'extra-15-packed-encoders-pylate' and extra != 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "typing-extensions", marker = "extra == 'extra-15-packed-encoders-embedding-gemma2' or extra != 'extra-15-packed-encoders-pylate' or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/c4/a1/53ae87971817e2d8370f8e79b843a881be33ab339502d71c5f82ac31f7af/sentence_transformers-6.1.0.tar.gz", hash = "sha256:299025df51550dc1a38f05be27a9b0bf881c4e5e70542b3b7757d05e00aa3868", size = 576566, upload-time = "2026-09-18T10:44:24.279Z" }
 wheels = [
@@ -3599,11 +3614,39 @@ wheels = [
 ]
 
 [[package]]
-name = "tokenizers"
-version = "0.22.2"
+name = "timm"
+version = "1.0.30"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "huggingface-hub" },
+    { name = "pyyaml" },
+    { name = "safetensors" },
+    { name = "torch" },
+    { name = "torchvision" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/0e/ab/49041213990e48edcb6013463b18ef86d8d3c5d6ac5b408802c480443025/timm-1.0.30.tar.gz", hash = "sha256:1444a3af7e17fdba5440ac2bcf6e4b728da96dd62289ed9e1bcba31a545f5935", size = 2534738, upload-time = "2026-09-22T20:46:13.9Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/f5/85/b897716d0fa016af23b11e6526f5ef76d2013e8bc36b9c7ce15d9200e456/timm-1.0.30-py3-none-any.whl", hash = "sha256:c8e27adf6801a2fdfb570dbbdd171f2f084756eefc673df8cfaab06bd14864f3", size = 2668917, upload-time = "2026-09-22T20:46:12.11Z" },
+]
+
+[[package]]
+name = "tokenizers"
+version = "0.22.2"
+source = { registry = "https://pypi.org/simple" }
+resolution-markers = [
+    "python_full_version >= '3.14' and sys_platform == 'win32'",
+    "python_full_version >= '3.14' and sys_platform == 'emscripten'",
+    "python_full_version >= '3.14' and sys_platform != 'emscripten' and sys_platform != 'win32'",
+    "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'win32'",
+    "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'emscripten'",
+    "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform != 'emscripten' and sys_platform != 'win32'",
+    "python_full_version == '3.11.*' and sys_platform == 'win32'",
+    "python_full_version == '3.11.*' and sys_platform == 'emscripten'",
+    "python_full_version == '3.11.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
+    "python_full_version < '3.11'",
+]
+dependencies = [
+    { name = "huggingface-hub", marker = "extra == 'extra-15-packed-encoders-pylate' or extra == 'extra-15-packed-encoders-qwen3-5'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/73/6f/f80cfef4a312e1fb34baf7d85c72d4411afde10978d4657f8cdd811d3ccc/tokenizers-0.22.2.tar.gz", hash = "sha256:473b83b915e547aa366d1eee11806deaf419e17be16310ac0a14077f1e28f917", size = 372115, upload-time = "2026-01-05T10:45:15.988Z" }
 wheels = [
@@ -3626,6 +3669,52 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/46/cd/e4851401f3d8f6f45d8480262ab6a5c8cb9c4302a790a35aa14eeed6d2fd/tokenizers-0.22.2-pp310-pypy310_pp73-manylinux_2_17_armv7l.manylinux2014_armv7l.whl", hash = "sha256:e10bf9113d209be7cd046d40fbabbaf3278ff6d18eb4da4c500443185dc1896c", size = 3161308, upload-time = "2026-01-05T10:40:40.737Z" },
     { url = "https://files.pythonhosted.org/packages/6f/6e/55553992a89982cd12d4a66dddb5e02126c58677ea3931efcbe601d419db/tokenizers-0.22.2-pp310-pypy310_pp73-manylinux_2_17_ppc64le.manylinux2014_ppc64le.whl", hash = "sha256:64d94e84f6660764e64e7e0b22baa72f6cd942279fdbb21d46abd70d179f0195", size = 3718964, upload-time = "2026-01-05T10:40:46.56Z" },
     { url = "https://files.pythonhosted.org/packages/59/8c/b1c87148aa15e099243ec9f0cf9d0e970cc2234c3257d558c25a2c5304e6/tokenizers-0.22.2-pp310-pypy310_pp73-manylinux_2_17_s390x.manylinux2014_s390x.whl", hash = "sha256:f01a9c019878532f98927d2bacb79bbb404b43d3437455522a00a30718cdedb5", size = 3373542, upload-time = "2026-01-05T10:40:52.803Z" },
+]
+
+[[package]]
+name = "tokenizers"
+version = "0.23.3"
+source = { registry = "https://pypi.org/simple" }
+resolution-markers = [
+    "python_full_version >= '3.14' and sys_platform == 'win32'",
+    "python_full_version >= '3.14' and sys_platform == 'emscripten'",
+    "python_full_version >= '3.14' and sys_platform != 'emscripten' and sys_platform != 'win32'",
+    "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'win32'",
+    "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'emscripten'",
+    "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform != 'emscripten' and sys_platform != 'win32'",
+    "python_full_version == '3.11.*' and sys_platform == 'win32'",
+    "python_full_version == '3.11.*' and sys_platform == 'emscripten'",
+    "python_full_version == '3.11.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
+    "python_full_version < '3.11'",
+]
+dependencies = [
+    { name = "huggingface-hub", marker = "extra == 'extra-15-packed-encoders-embedding-gemma2' or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra != 'extra-15-packed-encoders-pylate' and extra != 'extra-15-packed-encoders-qwen3-5')" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/e0/7c/2cabb2174e772636683008f2c5621949b645da7d303c596589e84516a184/tokenizers-0.23.3.tar.gz", hash = "sha256:cded33237c77caeef62944d32aa9a7ef42bdce2b3497e18d137e072a8c4be438", size = 385286, upload-time = "2026-10-09T10:16:55.759Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/aa/2e/4ce5b9716f26e526eff6b0502ebed4ea8d7161f03b3c77617c9f25528e97/tokenizers-0.23.3-cp310-abi3-macosx_10_12_x86_64.whl", hash = "sha256:9d2b5c97daf61688c2ad1803ca851800feaba50fb68d5821779e9ea5880d968c", size = 3148800, upload-time = "2026-10-09T10:00:51.457Z" },
+    { url = "https://files.pythonhosted.org/packages/b2/72/01e49f032bb346e5aaf06c10c74fe8aeec847173adbadd66eb7c53054bf2/tokenizers-0.23.3-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:68649e97d5b43c44c031d8d848874a6eecae8f8fe40ea989aa777a5a83aca716", size = 3101381, upload-time = "2026-10-09T10:00:54.063Z" },
+    { url = "https://files.pythonhosted.org/packages/15/fc/ae987741829b1cd547668c4c94be732ae3eefd1d74344e64c3d2ca714acd/tokenizers-0.23.3-cp310-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:ec82e80e65a862275b97c3d90b7a523df8d9519ee48aeb4e9625b2cc909274e0", size = 3519944, upload-time = "2026-10-09T10:00:55.885Z" },
+    { url = "https://files.pythonhosted.org/packages/1c/da/cc8f6c030afaf05fbddc608158fbb761dca46913cbeba6b112e59fc82e2a/tokenizers-0.23.3-cp310-abi3-manylinux_2_17_armv7l.manylinux2014_armv7l.whl", hash = "sha256:c64a0713180ff16829d4e7f39a658b77ea11443af4e1aa46523692943c9b1414", size = 3397695, upload-time = "2026-10-09T10:00:57.444Z" },
+    { url = "https://files.pythonhosted.org/packages/ec/f1/256f78d1365fa2cd3ea6db716883d74667c8cbb6a21f15fa5b89a773cdc2/tokenizers-0.23.3-cp310-abi3-manylinux_2_17_i686.manylinux2014_i686.whl", hash = "sha256:ddedfd4b3b4be6be24ff6ca645c4a37fddfd305f6f3e354c54cf10b715c48215", size = 3753125, upload-time = "2026-10-09T10:01:00.165Z" },
+    { url = "https://files.pythonhosted.org/packages/60/93/eee007ac2fcbf4ecfce7fbc354826cf3611f56bdb886f3e91b1f7dd06b8f/tokenizers-0.23.3-cp310-abi3-manylinux_2_17_ppc64le.manylinux2014_ppc64le.whl", hash = "sha256:2a89614730d7b80940a5d2ed9320e1ec8add5a745c6151d8d05071b7215505b6", size = 4018598, upload-time = "2026-10-09T10:01:02.05Z" },
+    { url = "https://files.pythonhosted.org/packages/bf/f9/0c96c4739461fce9d8d865b416728081bf6230022d7163bd6244f35f4b31/tokenizers-0.23.3-cp310-abi3-manylinux_2_17_s390x.manylinux2014_s390x.whl", hash = "sha256:e88646b8580c5ad7f4361477f1298e9cc01771a1ee9aecfe32c47b8ff614cc38", size = 3602442, upload-time = "2026-10-09T10:01:03.77Z" },
+    { url = "https://files.pythonhosted.org/packages/3a/40/6706b82693715581457c6d5423eaa7faae576bb0526c5738a57085eb4449/tokenizers-0.23.3-cp310-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:376851d22bcf9d650a5c3090bb83e6cf9e895fbf0595369fa4cd43c1f69b5f87", size = 3396193, upload-time = "2026-10-09T10:01:05.48Z" },
+    { url = "https://files.pythonhosted.org/packages/fe/0c/85946de40e25b7364b8f1bcf56def129069acd5bb364b7c86a32919e1a23/tokenizers-0.23.3-cp310-abi3-manylinux_2_31_riscv64.whl", hash = "sha256:bf501c40b72d2d5c8623620210430e9cac1ce47a46e45b34107b70a1557d46b0", size = 3553483, upload-time = "2026-10-09T10:01:07.387Z" },
+    { url = "https://files.pythonhosted.org/packages/f1/6b/8d615d92cad1d511ca5ab188d1c7c167f0b3d295cc0d96207f9f82d486d8/tokenizers-0.23.3-cp310-abi3-musllinux_1_2_aarch64.whl", hash = "sha256:114e2b55ed177179d59f4ab98200a4471e11e78f9e4b5a922d146740f96fcf52", size = 9972248, upload-time = "2026-10-09T10:01:09.437Z" },
+    { url = "https://files.pythonhosted.org/packages/c9/7d/a922e37ddd58d1b463bbc2ad08120c8f59c60b814cd353519a116b24f8ba/tokenizers-0.23.3-cp310-abi3-musllinux_1_2_armv7l.whl", hash = "sha256:d3407fb7b9c4d75dd68850ffd7180bc0a5d2dbaf0762d888e612f31fec3f9c6b", size = 9802957, upload-time = "2026-10-09T10:01:11.869Z" },
+    { url = "https://files.pythonhosted.org/packages/4b/06/5d3f506a86ae0699a0e4ea05c05978f9aee169ef2c1d844e68c971cf8194/tokenizers-0.23.3-cp310-abi3-musllinux_1_2_i686.whl", hash = "sha256:84513ef0aeb8bf8f4ea11a2e8a7ac163ec5288aa115e649a59b470ac5c3107df", size = 10145487, upload-time = "2026-10-09T10:01:14.268Z" },
+    { url = "https://files.pythonhosted.org/packages/26/e5/065625317690ea3548d834dad81f48ea1fd32e4964610e658e195d7fe28e/tokenizers-0.23.3-cp310-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:e05ab7baf7f47b406a95fea6f3b0a484b2ddcd9e1d14b68844c457eb755085a3", size = 10266026, upload-time = "2026-10-09T10:16:33.054Z" },
+    { url = "https://files.pythonhosted.org/packages/77/4e/babede85d0d19f5e3deeef0063e01848141329934d3d77c31b5cab5ac2b4/tokenizers-0.23.3-cp310-abi3-win32.whl", hash = "sha256:1ebf28794e7e4954e20a7f70fbea410b2d1f0418f7dbbca97ca384fcfef38c25", size = 2588086, upload-time = "2026-10-09T10:16:35.686Z" },
+    { url = "https://files.pythonhosted.org/packages/d1/6c/24f074c9a0efb98e61b20aafe6b2641922d5db24e447d5d6daffd9e17555/tokenizers-0.23.3-cp310-abi3-win_amd64.whl", hash = "sha256:1f0823bb00c5fdc98e487354d54dd55a03848d61a1a0bf29a68c77f24f3b26c3", size = 2872101, upload-time = "2026-10-09T10:16:37.533Z" },
+    { url = "https://files.pythonhosted.org/packages/53/77/a476b6f73a661c11d113a342d2326b91506cf2285f0995d1212a6bb2022d/tokenizers-0.23.3-cp310-abi3-win_arm64.whl", hash = "sha256:7e48734d2de9260d86f03ab056d2cfeeff3869f61dbd49aaa15a2793b5f3458b", size = 2742580, upload-time = "2026-10-09T10:16:39.244Z" },
+    { url = "https://files.pythonhosted.org/packages/65/46/f66baaedd42414a3f583c47379dc350e3e1f858a690d2574fd85ae70681b/tokenizers-0.23.3-cp314-cp314t-macosx_10_12_x86_64.whl", hash = "sha256:efa3d7318406b4d115dce61ad5061953f1f44b128e79c020ce4615d763e23b6e", size = 3154274, upload-time = "2026-10-09T10:16:40.876Z" },
+    { url = "https://files.pythonhosted.org/packages/c6/41/8de8c63b2d935eee5a0f42011fb7b786ffafeab0b8eb6d17acb8af2293b7/tokenizers-0.23.3-cp314-cp314t-macosx_11_0_arm64.whl", hash = "sha256:a4fbb3662f9f59d199d61338e54b4bcc11d07ebbb1aeb3540dacb2be9c521cb7", size = 3077805, upload-time = "2026-10-09T10:16:42.856Z" },
+    { url = "https://files.pythonhosted.org/packages/e3/08/b1cbae8dc8fc7c91f992ac2d87a086e9b3f25a28814047ca16a82fe8c87b/tokenizers-0.23.3-cp314-cp314t-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:de536665495cb4b409d25bade41963f801aff4225c19a6b804b048f7d14e34c7", size = 3491678, upload-time = "2026-10-09T10:16:45.093Z" },
+    { url = "https://files.pythonhosted.org/packages/3e/0d/aac0cb2f3a1fdbef514145b4c5f2df4d05deeb1ee8f73ae641a1b4a62a85/tokenizers-0.23.3-cp314-cp314t-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:5cc24bb457dd4a8af89c8fcb40074d570129ec473df2a866c276ee55db4749d7", size = 3367420, upload-time = "2026-10-09T10:16:47.112Z" },
+    { url = "https://files.pythonhosted.org/packages/1e/1d/41a697d0c193a320b243fbd68b2057b6eb2f01ecf80899e1a16e646ff699/tokenizers-0.23.3-cp314-cp314t-musllinux_1_2_aarch64.whl", hash = "sha256:acd5c57b4bd3e56e246e2731a3a3a6825a7a7d89b7e3b761ba80bc521710f04b", size = 9945973, upload-time = "2026-10-09T10:16:49.326Z" },
+    { url = "https://files.pythonhosted.org/packages/37/e9/b56e619fcd583000a2b1254bb46af8dc6a174d3ba3329f454ad5a95a2be2/tokenizers-0.23.3-cp314-cp314t-musllinux_1_2_x86_64.whl", hash = "sha256:82eb480f6f1c21cea3349dec32cf1a6384c6c1e775f00f83b0d51197bc013687", size = 10237491, upload-time = "2026-10-09T10:16:51.943Z" },
+    { url = "https://files.pythonhosted.org/packages/6f/68/f58b3beb95f3b62816e91e5e768e684cd63e58f9cbece22036dae3b1c971/tokenizers-0.23.3-cp314-cp314t-win_amd64.whl", hash = "sha256:1554a6eed34d9d6a78d23360f4e06df8dffab1ae08c7e8488e0b3e3b36cc266f", size = 2847654, upload-time = "2026-10-09T10:16:54.166Z" },
 ]
 
 [[package]]
@@ -3687,20 +3776,20 @@ name = "torch"
 version = "2.11.0+cu128"
 source = { registry = "https://download.pytorch.org/whl/cu128" }
 dependencies = [
-    { name = "cuda-bindings", marker = "sys_platform == 'linux' or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
-    { name = "cuda-toolkit", extra = ["cublas", "cudart", "cufft", "cufile", "cupti", "curand", "cusolver", "cusparse", "nvjitlink", "nvrtc", "nvtx"], marker = "sys_platform == 'linux' or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "cuda-bindings", marker = "sys_platform == 'linux' or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "cuda-toolkit", extra = ["cublas", "cudart", "cufft", "cufile", "cupti", "curand", "cusolver", "cusparse", "nvjitlink", "nvrtc", "nvtx"], marker = "sys_platform == 'linux' or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
     { name = "filelock" },
     { name = "fsspec" },
     { name = "jinja2" },
-    { name = "networkx", version = "3.4.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
-    { name = "networkx", version = "3.6.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11' or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
-    { name = "nvidia-cudnn-cu12", marker = "sys_platform == 'linux' or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
-    { name = "nvidia-cusparselt-cu12", marker = "sys_platform == 'linux' or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
-    { name = "nvidia-nccl-cu12", marker = "sys_platform == 'linux' or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
-    { name = "nvidia-nvshmem-cu12", marker = "sys_platform == 'linux' or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "networkx", version = "3.4.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "networkx", version = "3.6.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11' or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "nvidia-cudnn-cu12", marker = "sys_platform == 'linux' or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "nvidia-cusparselt-cu12", marker = "sys_platform == 'linux' or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "nvidia-nccl-cu12", marker = "sys_platform == 'linux' or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "nvidia-nvshmem-cu12", marker = "sys_platform == 'linux' or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
     { name = "setuptools" },
     { name = "sympy" },
-    { name = "triton", marker = "sys_platform == 'linux' or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "triton", marker = "sys_platform == 'linux' or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
     { name = "typing-extensions" },
 ]
 wheels = [
@@ -3763,9 +3852,9 @@ name = "torchvision"
 version = "0.26.0+cu128"
 source = { registry = "https://download.pytorch.org/whl/cu128" }
 dependencies = [
-    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.11' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
-    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version == '3.11.*' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
-    { name = "numpy", version = "2.5.0", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.12' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.11' and extra == 'extra-15-packed-encoders-embedding-gemma2') or (python_full_version < '3.11' and extra != 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version == '3.11.*' and extra == 'extra-15-packed-encoders-embedding-gemma2') or (python_full_version == '3.11.*' and extra != 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "numpy", version = "2.5.0", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.12' and extra == 'extra-15-packed-encoders-embedding-gemma2') or (python_full_version >= '3.12' and extra != 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
     { name = "pillow" },
     { name = "torch" },
 ]
@@ -3798,7 +3887,7 @@ name = "tqdm"
 version = "4.68.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "colorama", marker = "sys_platform == 'win32' or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "colorama", marker = "sys_platform == 'win32' or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/87/d7/0535a28b1f5f24f6612fb3ff1e89fb1a8d160fee0f976e0aa6803862134b/tqdm-4.68.3.tar.gz", hash = "sha256:00dfa48452b6b6cfae3dd9885636c23d3422d1ec97c66d96818cbd5e0821d482", size = 170596, upload-time = "2026-06-17T07:36:52.105Z" }
 wheels = [
@@ -3822,17 +3911,17 @@ resolution-markers = [
     "python_full_version < '3.11'",
 ]
 dependencies = [
-    { name = "huggingface-hub", marker = "extra == 'extra-15-packed-encoders-pylate'" },
-    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.11' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
-    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version == '3.11.*' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
-    { name = "numpy", version = "2.5.0", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.12' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
-    { name = "packaging", marker = "extra == 'extra-15-packed-encoders-pylate'" },
-    { name = "pyyaml", marker = "extra == 'extra-15-packed-encoders-pylate'" },
-    { name = "regex", marker = "extra == 'extra-15-packed-encoders-pylate'" },
-    { name = "safetensors", marker = "extra == 'extra-15-packed-encoders-pylate'" },
-    { name = "tokenizers", marker = "extra == 'extra-15-packed-encoders-pylate'" },
-    { name = "tqdm", marker = "extra == 'extra-15-packed-encoders-pylate'" },
-    { name = "typer", marker = "extra == 'extra-15-packed-encoders-pylate'" },
+    { name = "huggingface-hub", marker = "extra == 'extra-15-packed-encoders-pylate' or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.11' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version == '3.11.*' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "numpy", version = "2.5.0", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.12' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "packaging", marker = "extra == 'extra-15-packed-encoders-pylate' or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "pyyaml", marker = "extra == 'extra-15-packed-encoders-pylate' or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "regex", marker = "extra == 'extra-15-packed-encoders-pylate' or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "safetensors", marker = "extra == 'extra-15-packed-encoders-pylate' or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "tokenizers", version = "0.22.2", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-15-packed-encoders-pylate' or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "tqdm", marker = "extra == 'extra-15-packed-encoders-pylate' or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "typer", marker = "extra == 'extra-15-packed-encoders-pylate' or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/fc/1a/70e830d53ecc96ce69cfa8de38f163712d2b43ac52fbd743f39f56025c31/transformers-5.3.0.tar.gz", hash = "sha256:009555b364029da9e2946d41f1c5de9f15e6b1df46b189b7293f33a161b9c557", size = 8830831, upload-time = "2026-03-04T17:41:46.119Z" }
 wheels = [
@@ -3856,21 +3945,55 @@ resolution-markers = [
     "python_full_version < '3.11'",
 ]
 dependencies = [
-    { name = "huggingface-hub", marker = "extra == 'extra-15-packed-encoders-qwen3-5' or extra != 'extra-15-packed-encoders-pylate'" },
-    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.11' and extra != 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
-    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version == '3.11.*' and extra != 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
-    { name = "numpy", version = "2.5.0", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.12' and extra != 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
-    { name = "packaging", marker = "extra == 'extra-15-packed-encoders-qwen3-5' or extra != 'extra-15-packed-encoders-pylate'" },
-    { name = "pyyaml", marker = "extra == 'extra-15-packed-encoders-qwen3-5' or extra != 'extra-15-packed-encoders-pylate'" },
-    { name = "regex", marker = "extra == 'extra-15-packed-encoders-qwen3-5' or extra != 'extra-15-packed-encoders-pylate'" },
-    { name = "safetensors", marker = "extra == 'extra-15-packed-encoders-qwen3-5' or extra != 'extra-15-packed-encoders-pylate'" },
-    { name = "tokenizers", marker = "extra == 'extra-15-packed-encoders-qwen3-5' or extra != 'extra-15-packed-encoders-pylate'" },
-    { name = "tqdm", marker = "extra == 'extra-15-packed-encoders-qwen3-5' or extra != 'extra-15-packed-encoders-pylate'" },
-    { name = "typer", marker = "extra == 'extra-15-packed-encoders-qwen3-5' or extra != 'extra-15-packed-encoders-pylate'" },
+    { name = "huggingface-hub", marker = "(extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra != 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra != 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.11' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version == '3.11.*' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "numpy", version = "2.5.0", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.12' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "packaging", marker = "(extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra != 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra != 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "pyyaml", marker = "(extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra != 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra != 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "regex", marker = "(extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra != 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra != 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "safetensors", marker = "(extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra != 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra != 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "tokenizers", version = "0.22.2", source = { registry = "https://pypi.org/simple" }, marker = "(extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra != 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra != 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "tqdm", marker = "(extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra != 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra != 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "typer", marker = "(extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra != 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra != 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/51/58/7f843608f2e8421f86bb97060b54649be6239ec612b82bf9d41e65c26c00/transformers-5.9.0.tar.gz", hash = "sha256:25997cb8fa6053533171634b6162d7df54346530ec2aa9b42bb834e63668c842", size = 8642240, upload-time = "2026-05-20T14:50:49.278Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/02/ca/2eaa5359f2ccb8c2e1656bc26305ad0cf438aa392ce4b29ae67a315c186e/transformers-5.9.0-py3-none-any.whl", hash = "sha256:1d19509bcff7028ebc6b277d71caa712e8353778463d38764237d14b42b52788", size = 10787648, upload-time = "2026-05-20T14:50:45.337Z" },
+]
+
+[[package]]
+name = "transformers"
+version = "5.19.0"
+source = { registry = "https://pypi.org/simple" }
+resolution-markers = [
+    "python_full_version >= '3.14' and sys_platform == 'win32'",
+    "python_full_version >= '3.14' and sys_platform == 'emscripten'",
+    "python_full_version >= '3.14' and sys_platform != 'emscripten' and sys_platform != 'win32'",
+    "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'win32'",
+    "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'emscripten'",
+    "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform != 'emscripten' and sys_platform != 'win32'",
+    "python_full_version == '3.11.*' and sys_platform == 'win32'",
+    "python_full_version == '3.11.*' and sys_platform == 'emscripten'",
+    "python_full_version == '3.11.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
+    "python_full_version < '3.11'",
+]
+dependencies = [
+    { name = "huggingface-hub", marker = "extra == 'extra-15-packed-encoders-embedding-gemma2' or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra != 'extra-15-packed-encoders-pylate' and extra != 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.11' and extra == 'extra-15-packed-encoders-embedding-gemma2') or (python_full_version < '3.11' and extra != 'extra-15-packed-encoders-pylate' and extra != 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version == '3.11.*' and extra == 'extra-15-packed-encoders-embedding-gemma2') or (python_full_version == '3.11.*' and extra != 'extra-15-packed-encoders-pylate' and extra != 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "numpy", version = "2.5.0", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.12' and extra == 'extra-15-packed-encoders-embedding-gemma2') or (python_full_version >= '3.12' and extra != 'extra-15-packed-encoders-pylate' and extra != 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "packaging", marker = "extra == 'extra-15-packed-encoders-embedding-gemma2' or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra != 'extra-15-packed-encoders-pylate' and extra != 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "pyyaml", marker = "extra == 'extra-15-packed-encoders-embedding-gemma2' or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra != 'extra-15-packed-encoders-pylate' and extra != 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "regex", marker = "extra == 'extra-15-packed-encoders-embedding-gemma2' or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra != 'extra-15-packed-encoders-pylate' and extra != 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "safetensors", marker = "extra == 'extra-15-packed-encoders-embedding-gemma2' or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra != 'extra-15-packed-encoders-pylate' and extra != 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "tokenizers", version = "0.23.3", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-15-packed-encoders-embedding-gemma2' or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra != 'extra-15-packed-encoders-pylate' and extra != 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "tqdm", marker = "extra == 'extra-15-packed-encoders-embedding-gemma2' or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra != 'extra-15-packed-encoders-pylate' and extra != 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "typer", marker = "extra == 'extra-15-packed-encoders-embedding-gemma2' or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra != 'extra-15-packed-encoders-pylate' and extra != 'extra-15-packed-encoders-qwen3-5')" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/65/4c/70012ed0795235fb6bd7806fafd4a1842f03e49ebbfa3bb9580e451948ce/transformers-5.19.0.tar.gz", hash = "sha256:87f38dd25e4521151b97e94520ac457f44a0ae8a8358a5b112daff6c64a822d6", size = 10032022, upload-time = "2026-10-06T16:39:00.229Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b9/59/1e7f1212c215c73690ae6cab4678efe1555ff985953e145d88cc212859b0/transformers-5.19.0-py3-none-any.whl", hash = "sha256:afcd2dd5f603ed28c1e1fcb00a338ccbb4ef5f878ed289635df8b58187afb518", size = 12599123, upload-time = "2026-10-06T16:38:56.794Z" },
 ]
 
 [[package]]
@@ -4027,9 +4150,9 @@ version = "2.25.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "numkong" },
-    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.11' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
-    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version == '3.11.*' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
-    { name = "numpy", version = "2.5.0", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.12' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.11' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version == '3.11.*' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5')" },
+    { name = "numpy", version = "2.5.0", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.12' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-pylate' and extra == 'extra-15-packed-encoders-qwen3-5') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-pylate') or (extra == 'extra-15-packed-encoders-embedding-gemma2' and extra == 'extra-15-packed-encoders-qwen3-5')" },
     { name = "tqdm" },
 ]
 wheels = [
