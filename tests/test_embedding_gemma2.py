@@ -93,6 +93,15 @@ def test_post_norm_kernels_match_their_references():
         assert pieces["gelu_mul"].validate(*args).max_abs_error == 0.0
 
 
+def test_post_norm_add_rejects_missing_primary_scale():
+    from packed_encoders.errors import UnsupportedTargetError
+    from packed_encoders.pieces.post_norm import post_norm_pieces
+
+    x = torch.randn(7, 128, device="cuda", dtype=torch.bfloat16)
+    with pytest.raises(UnsupportedTargetError, match="primary scale"):
+        post_norm_pieces()["post_norm_add"].validate(x, x, None, 1e-6)
+
+
 @pytest.mark.parametrize("order", [None, ("torch_varlen",), ("sdpa",)], ids=["default", "torch_varlen", "sdpa"])
 def test_attention_probe_honours_window_and_scale(order):
     from packed_encoders.runtime import attention as att
@@ -302,3 +311,111 @@ def test_backbone_inputs_embeds_run_packed(tiny):
     cos = F.cosine_similarity(out[real].float(), stock[real].float(), dim=-1)
     assert cos.mean().item() > 0.999 and cos.min().item() > 0.99
     pe.unpack(model)
+
+
+@torch.no_grad()
+@pytest.mark.parametrize("path", ["eager", "embeds", "graph"])
+def test_validation_rejects_zeroed_short_sequences(tiny, monkeypatch, path):
+    import packed_encoders as pe
+    from packed_encoders.arch.embedding_gemma2.engine import EmbeddingGemma2Engine
+    from packed_encoders.errors import ValidationError
+    from packed_encoders.state import ATTR
+
+    model = copy.deepcopy(tiny)
+    if path == "graph":
+        original = EmbeddingGemma2Engine.padded_core
+
+        def broken(self, static):
+            out = original(self, static)
+            # Use the live device lengths: the faulty operation must also run during replay.
+            short = (static.lens <= 7).repeat_interleave(static.seq)[:, None]
+            return out.masked_fill(short, 0)
+
+        monkeypatch.setattr(EmbeddingGemma2Engine, "padded_core", broken)
+    else:
+        original = EmbeddingGemma2Engine.forward_packed
+
+        def broken(self, ids, lengths, *, embeds=None):
+            out = original(self, ids, lengths, embeds=embeds)
+            if (path == "embeds") == (embeds is not None):
+                out = out.clone()
+                offset = 0
+                for length in lengths:
+                    if length <= 7:
+                        out[offset:offset + length] = 0
+                    offset += length
+            return out
+
+        monkeypatch.setattr(EmbeddingGemma2Engine, "forward_packed", broken)
+
+    # These rows are <1% of either default batch, so a batch-mean-only gate accepts the fault.
+    with pytest.raises(ValidationError, match="worst sequence mean 0.000000"):
+        pe.pack(model)
+    assert getattr(model, ATTR, None) is None
+
+
+@torch.no_grad()
+@pytest.mark.parametrize("kind", ["text_model", "wrapper"])
+def test_prepared_mask_dictionary_falls_back_to_hf(tiny, kind):
+    from transformers.masking_utils import create_bidirectional_mask, create_bidirectional_sliding_window_mask
+
+    import packed_encoders as pe
+    from packed_encoders.state import ATTR
+
+    model = _stock(tiny, kind)
+    text = model if kind == "text_model" else model.language_model
+    ids = torch.randint(5, VOCAB - 50, (2, 40), device="cuda")
+    mask = torch.ones_like(ids)
+    mask[0, 20:] = 0
+    kwargs = dict(config=text.config, inputs_embeds=text.embed_tokens(ids), attention_mask=mask)
+    prepared = dict(full_attention=create_bidirectional_mask(**kwargs),
+                    sliding_attention=create_bidirectional_sliding_window_mask(**kwargs))
+    stock = model(input_ids=ids, attention_mask=prepared).last_hidden_state
+    pe.pack(model)
+    try:
+        state = getattr(model, ATTR)
+        original, calls = state.original_forward, []
+        state.original_forward = lambda *a, **k: calls.append(1) or original(*a, **k)
+        with pytest.warns(UserWarning, match="original forward"):
+            out = model(input_ids=ids, attention_mask=prepared).last_hidden_state
+        assert calls == [1]
+        assert torch.equal(out, stock)
+    finally:
+        pe.unpack(model)
+
+
+@torch.no_grad()
+@pytest.mark.parametrize("kind", ["text_model", "wrapper"])
+@pytest.mark.parametrize("graphs", [False, True])
+def test_training_dropout_falls_back_after_packing_in_eval(tiny, kind, graphs):
+    import packed_encoders as pe
+    from packed_encoders.state import ATTR
+
+    model = _stock(tiny, kind)
+    text = model if kind == "text_model" else model.language_model
+    text.config.attention_dropout = 0.5
+    for layer in text.layers:
+        layer.self_attn.attention_dropout = 0.5
+    ids = torch.randint(5, VOCAB - 50, (2, 40), device="cuda")
+    pe.pack(model, cuda_graph=graphs)
+    try:
+        state = getattr(model, ATTR)
+        before = model(input_ids=ids).last_hidden_state
+        if graphs:
+            assert state.runner.num_graphs > 0
+        original, calls = state.original_forward, []
+        state.original_forward = lambda *a, **k: calls.append(1) or original(*a, **k)
+        model.train()
+        torch.manual_seed(17)
+        stock = original(input_ids=ids).last_hidden_state
+        torch.manual_seed(17)
+        with pytest.warns(UserWarning, match="training dropout"):
+            out = model(input_ids=ids).last_hidden_state
+        assert calls == [1]
+        assert torch.equal(out, stock)  # identical stochastic computation with the same RNG state
+
+        model.eval()
+        assert torch.equal(model(input_ids=ids).last_hidden_state, before)
+        assert calls == [1]            # eval returns to the packed path
+    finally:
+        pe.unpack(model)

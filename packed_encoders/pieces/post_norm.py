@@ -50,6 +50,7 @@ def check_post_add(delta, residual, w, eps, scalar=None, w_next=None):
     _require(delta.ndim == 2 and delta.shape == residual.shape and delta.dtype == residual.dtype and
              delta.is_contiguous() and residual.is_contiguous() and _pow2(delta.shape[1]) and eps > 0,
              "post-norm add requires contiguous [T,D] delta and residual with a power-of-two D")
+    _require(w is not None, "post-norm add requires an fp32 [D] primary scale")
     for scale in (w, w_next):
         _require(scale is None or (scale.shape == (delta.shape[1],) and scale.dtype == torch.float32),
                  "post-norm scales must be fp32 [D]")

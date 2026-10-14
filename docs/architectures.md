@@ -348,9 +348,10 @@ source. Its patch target is the multimodal wrapper (`EmbeddingGemma2Model`, whic
 SentenceTransformers load) when it is given one, else the backbone. The wrapper always calls the
 backbone with `inputs_embeds`, so the patched wrapper takes text-only calls itself with the ids it
 was given, mapping image, video and audio placeholders to padding as the wrapper does. Each patched
-forward keeps its module's contract: `input_ids` (or, at the backbone, `inputs_embeds`) plus
-`attention_mask`, right or left padded, in; `last_hidden_state` out, pads as zeros. Pooling and
-normalization run unchanged.
+forward accepts `input_ids` (or, at the backbone, `inputs_embeds`) plus `attention_mask`, right or
+left padded, and returns `last_hidden_state`. Parity covers real tokens: packed padding slots are
+zero, while HF's padding outputs can be nonzero. Pooling and normalization run unchanged when
+pooling uses the attention mask; consumers must mask padding rather than compare or pool those slots.
 
 ```python
 st = SentenceTransformer("google/embeddinggemma-2", device="cuda", model_kwargs={"dtype": torch.bfloat16})
@@ -360,7 +361,8 @@ queries = st.encode_query(texts, batch_size=32)
 
 Token-id batches replay CUDA graphs when they fit a bucket, else run the eager packed engine;
 input-embedding batches at the backbone run eagerly. Image, video or audio inputs, gradients,
-explicit `position_ids`, extra outputs and masks with holes run the original forward unchanged.
+active training dropout, explicit `position_ids`, extra outputs, masks with holes and prepared
+mask dictionaries run the original forward unchanged.
 Bidirectional models never share prefixes.
 
 `EmbeddingGemma2Pieces` selects 7 pieces: projection; RMSNorm over rows (the input norm, the PLE
@@ -375,7 +377,12 @@ and the global layers (head dim 512, beyond its limit) SDPA. Biases, unmerged ad
 activations and causal configs are rejected before any mutation.
 
 Pack-time validation holds eager, input-embedding and graphed output to the model's own forward by
-the per-token cosine mean only (≥ 0.99): the output projection amplifies bf16 rounding on a few
+the batch's per-token cosine mean (≥ 0.99) and each sequence's mean (≥ 0.98). The sequence gate
+prevents long rows from hiding corruption of whole short rows. On the real checkpoint with an
+RTX 5090, Torch 2.11 and Transformers 5.19, the lowest sequence mean was 0.98935 eager and
+0.99048 graphed, so a per-sequence threshold of 0.99 would reject the correct eager engine.
+The report records the lowest sequence mean for each path in `*_sequence_cos_mean_min`.
+Token minima remain informational: the output projection amplifies bf16 rounding on a few
 tokens, so the model's own bf16 forward is far from its fp32 forward on those tokens. Measured on
 the validation batches (random ids, rows of 7/129/1,100/64 and 3/21/600 tokens), per-token cosine
 mean (min):

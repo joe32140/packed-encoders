@@ -4,9 +4,9 @@ embeddings, a per-token output projection).
 The engine (`engine.EmbeddingGemma2Engine`) is per text backbone (`EmbeddingGemma2TextModel`). The
 adapter patches the multimodal wrapper (`EmbeddingGemma2Model`, which `AutoModel` and
 SentenceTransformers load) when it is given one, else the text backbone itself; each patched forward
-keeps its module's contract: `input_ids` (or, for the backbone, `inputs_embeds`) plus
-`attention_mask` (right or left padded) in, padded `last_hidden_state` out. The model's pooling then
-runs unchanged.
+accepts `input_ids` (or, for the backbone, `inputs_embeds`) plus `attention_mask` (right or left
+padded) and returns padded `last_hidden_state`. Packed output parity covers real tokens; padding
+slots are zero, unlike HF's generally nonzero padding outputs. Mask-aware pooling runs unchanged.
 
 What `pack()` installs, per batch:
   - token-id batches, no grad: CUDA graph replay when the batch fits a `(rows, S)` bucket, else the
@@ -14,8 +14,8 @@ What `pack()` installs, per batch:
     own forward would turn them into input embeddings first), mapping image, video and audio
     placeholders to padding as it does.
   - input-embedding batches at the backbone, no grad: the eager packed engine.
-  - image, video or audio inputs, grad-enabled calls, extra outputs, explicit `position_ids`, a mask
-    with holes: the original forward, untouched.
+  - image, video or audio inputs, grad-enabled calls, active training dropout, extra outputs,
+    explicit `position_ids`, a mask with holes or a prepared mask dictionary: the original forward.
 """
 
 from __future__ import annotations
@@ -43,12 +43,13 @@ from packed_encoders.state import ATTR
 
 MIN_CAPABILITY = (8, 0)   # bf16 tensor cores; the Triton kernels target sm_80+
 # Validation measures the engine against the model's own forward on this device: per-token cosine
-# over real tokens, bf16 vs bf16, for eager and graphed alike. Only the mean is held: the output
-# projection amplifies bf16 rounding on a few tokens, so the model's own bf16 forward reaches a
-# per-token minimum near 0.82 against its fp32 forward on these batches, while every structural
-# error measured (no window, no v norm, no layer scalar) took the mean below 0.97
-# (measurements: docs/architectures.md). The minimum is reported, not checked.
+# over real tokens, bf16 vs bf16, for eager and graphed alike. The output projection amplifies
+# rounding on a few tokens, so token minima are reported, not gated. Keep the batch mean gate
+# and also check every sequence: long rows must not hide a broken short row. On the real
+# checkpoint / RTX 5090 the lowest sequence mean was 0.98935; 0.98 leaves rounding margin
+# while rejecting sequence-level corruption (measurements: docs/architectures.md).
 MEAN_COS = 0.99
+SEQUENCE_MEAN_COS = 0.98
 _BACKENDS = {None: None, "auto": None, "flash": ("flash4", "flash2", "torch_varlen"), "sdpa": ("sdpa",)}
 _MODULE = "transformers.models.embedding_gemma2."
 _PLACEHOLDERS = ("image_token_id", "video_token_id", "audio_token_id")
@@ -75,16 +76,20 @@ class EmbeddingGemma2Report:
     embeds_cos_min: float | None = None
     graph_cos_mean: float | None = None        # graph replay, also against the model's forward
     graph_cos_min: float | None = None
+    eager_sequence_cos_mean_min: float | None = None  # lowest mean over any individual sequence
+    embeds_sequence_cos_mean_min: float | None = None
+    graph_sequence_cos_mean_min: float | None = None
     pieces: dict = field(default_factory=dict)
 
-    def record(self, name: str, got: Tensor, ref: Tensor) -> tuple[float, float]:
-        """Per-token cosine of `got` vs `ref` into `{name}_cos_mean/min`, keeping the worst batch."""
+    def record(self, name: str, got: Tensor, ref: Tensor, lengths) -> tuple[float, float, float]:
+        """Record the batch mean, token minimum and worst sequence mean, retaining the worst seen."""
         cos = F.cosine_similarity(got, ref, dim=-1)
         mean, low = cos.mean().item(), cos.min().item()
-        for stat, value in (("mean", mean), ("min", low)):
-            prev = getattr(self, f"{name}_cos_{stat}")
-            setattr(self, f"{name}_cos_{stat}", value if prev is None else min(prev, value))
-        return mean, low
+        sequence_low = torch.stack([row.mean() for row in cos.split(list(lengths))]).min().item()
+        for stat, value in (("cos_mean", mean), ("cos_min", low), ("sequence_cos_mean_min", sequence_low)):
+            prev = getattr(self, f"{name}_{stat}")
+            setattr(self, f"{name}_{stat}", value if prev is None else min(prev, value))
+        return mean, low, sequence_low
 
 
 @dataclass
@@ -147,6 +152,8 @@ def _hf_rows(state: EmbeddingGemma2State, input_ids, embeds, attention_mask, arg
     """Per-row token counts and first real column, or None when the engine can't serve the call."""
     if args or torch.is_grad_enabled() or (input_ids is None) == (embeds is None):
         return None
+    if any(layer.module.training and layer.module.attention_dropout for layer in state.engine.layers):
+        return None          # no_grad does not disable HF's training dropout
     if input_ids is not None and input_ids.dim() != 2:
         return None
     if embeds is not None and (embeds.dim() != 3 or embeds.shape[-1] != state.engine.model_dim):
@@ -161,7 +168,7 @@ def _hf_rows(state: EmbeddingGemma2State, input_ids, embeds, attention_mask, arg
     B, S = (input_ids if embeds is None else embeds).shape[:2]
     if attention_mask is None:
         return [S] * B, [0] * B
-    if attention_mask.shape != (B, S):
+    if not isinstance(attention_mask, Tensor) or attention_mask.shape != (B, S):
         return None
     real = attention_mask != 0
     lens = real.sum(1)
@@ -192,8 +199,8 @@ def _make_hf_forward(module: nn.Module, state: EmbeddingGemma2State, *, wrapper:
         if rows is None:
             if not state.fallback_warned:
                 state.fallback_warned = True
-                warnings.warn("packed-encoders: this call runs the model's original forward (gradients, image, "
-                              "video or audio inputs, position_ids, extra outputs or a mask with holes)", stacklevel=3)
+                warnings.warn("packed-encoders: this call runs the model's original forward (gradients, training "
+                              "dropout, media inputs, position_ids, extra outputs or unsupported masks)", stacklevel=3)
             if embeds is not None:
                 kwargs["inputs_embeds"] = embeds
             return original()
@@ -349,18 +356,20 @@ class EmbeddingGemma2:
             eager = _hidden(state, packed, list(lengths), graphs=False).float()
             via_embeds = _hidden(state, None, list(lengths), embeds=engine._embed(packed), graphs=False).float()
             for name, got in (("eager", eager), ("embeds", via_embeds)):
-                mean, low = report.record(name, got, ref)
-                if not mean >= MEAN_COS:
+                mean, low, sequence_low = report.record(name, got, ref, lengths)
+                if not (mean >= MEAN_COS and sequence_low >= SEQUENCE_MEAN_COS):
                     raise ValidationError(f"engine ({name}) diverged from the model's forward on rows {tuple(lengths)}: "
-                                          f"per-token cosine mean {mean:.6f} min {low:.5f}")
+                                          f"per-token cosine mean {mean:.6f} min {low:.5f}; "
+                                          f"worst sequence mean {sequence_low:.6f}")
             if graphs:
                 runner = PaddedGraphRunner(engine, PaddedGraphConfig(row_buckets=(B,), max_graphs=1))
                 graphed = runner(packed, list(lengths)).float()
                 del runner
-                mean, low = report.record("graph", graphed, ref)
-                if not mean >= MEAN_COS:
+                mean, low, sequence_low = report.record("graph", graphed, ref, lengths)
+                if not (mean >= MEAN_COS and sequence_low >= SEQUENCE_MEAN_COS):
                     raise ValidationError(f"CUDA-graph replay diverged from the model's forward on rows {tuple(lengths)}: "
-                                          f"per-token cosine mean {mean:.6f} min {low:.5f}")
+                                          f"per-token cosine mean {mean:.6f} min {low:.5f}; "
+                                          f"worst sequence mean {sequence_low:.6f}")
 
     def _engine(self, text_model: nn.Module, attention_backend: str | None):
         from packed_encoders.arch.embedding_gemma2.engine import EmbeddingGemma2Engine
