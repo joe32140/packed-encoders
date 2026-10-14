@@ -175,8 +175,10 @@ def _segments(q, k, v, lengths_q, lengths_k, causal, window=(-1, -1), scale=None
         if not qs.shape[0]:
             continue
         mask = _band(qs.shape[0], ks.shape[0], causal, window, q.device)
-        outs.append(F.scaled_dot_product_attention(qs.transpose(0, 1), ks.transpose(0, 1), vs.transpose(0, 1),
-                                                   attn_mask=mask, scale=scale).transpose(0, 1))
+        # An explicit batch dimension lets SDPA consider its fused CUDA backends.
+        qb, kb, vb = (x.transpose(0, 1).unsqueeze(0) for x in (qs, ks, vs))
+        outs.append(F.scaled_dot_product_attention(qb, kb, vb, attn_mask=mask,
+                                                   scale=scale).squeeze(0).transpose(0, 1))
     return torch.cat(outs) if outs else torch.empty_like(q)
 
 
