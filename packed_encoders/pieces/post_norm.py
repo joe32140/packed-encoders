@@ -74,4 +74,3 @@ def post_norm_pieces():
         post_norm_add=Piece("triton-post-norm-add", POST_ADD, k.post_norm_add, ref_post_add, check_post_add),
         gelu_mul=Piece("triton-gelu-tanh-mul", GELU_MUL, k.gelu_mul, ref_gelu_mul, check_gelu_mul),
     )
-
