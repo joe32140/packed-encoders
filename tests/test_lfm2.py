@@ -182,6 +182,53 @@ def test_norms_trained_after_packing_reach_eager_and_captured_graphs(tiny):
 # ---------------------------------------------------------------------------- HF entry
 
 
+@torch.no_grad()
+@pytest.mark.parametrize("validate", [False, True])
+def test_noncausal_config_is_refused_before_mutation(tiny, validate):
+    import packed_encoders as pe
+    from packed_encoders.arch.lfm2.engine import Lfm2Engine
+    from packed_encoders.errors import UnsupportedTargetError
+    from packed_encoders.state import ATTR
+
+    model = copy.deepcopy(tiny)
+    model.config.is_causal = False
+    pointers = {n: p.data_ptr() for n, p in model.named_parameters()}
+    for prepare in (lambda: Lfm2Engine(model), lambda: pe.pack(model, validate=validate)):
+        with pytest.raises(UnsupportedTargetError, match="causal backbones only"):
+            prepare()
+        assert {n: p.data_ptr() for n, p in model.named_parameters()} == pointers
+        assert getattr(model, ATTR, None) is None
+
+
+@torch.no_grad()
+@pytest.mark.parametrize("graphs", [False, True])
+@pytest.mark.parametrize("inputs_embeds", [False, True])
+def test_single_left_padded_row_keeps_hf_convolution_semantics(tiny, graphs, inputs_embeds):
+    import packed_encoders as pe
+    from packed_encoders.state import ATTR
+
+    model = copy.deepcopy(tiny)
+    ids = torch.randint(0, VOCAB, (1, 24), generator=torch.Generator().manual_seed(8)).cuda()
+    mask = torch.ones_like(ids)
+    mask[:, :12] = 0
+    inputs = {"inputs_embeds": model.embed_tokens(ids)} if inputs_embeds else {"input_ids": ids}
+    stock = model(**inputs, attention_mask=mask, use_cache=False).last_hidden_state
+    pe.pack(model, cuda_graph=graphs)
+    try:
+        state = getattr(model, ATTR)
+        calls, original = [], state.original_forward
+        state.original_forward = lambda *a, **k: calls.append(1) or original(*a, **k)
+        with pytest.warns(UserWarning, match="single-row left padding"):
+            actual = model(**inputs, attention_mask=mask, use_cache=False).last_hidden_state
+        assert calls == [1]
+        torch.testing.assert_close(actual, stock, rtol=0, atol=0)
+        # Right padding remains eligible for the packed engine.
+        model(**inputs, attention_mask=mask.flip(1), use_cache=False)
+        assert calls == [1]
+    finally:
+        pe.unpack(model)
+
+
 class _EmbedsWrapper(nn.Module):
     """A multimodal-style wrapper: embeds the tokens itself and calls the backbone with inputs_embeds."""
 

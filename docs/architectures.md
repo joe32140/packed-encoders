@@ -370,6 +370,9 @@ modules; pack-time validation compares token ids (eager and graphed) and input e
 with the model's forward. Only causal backbones are supported: a bidirectional LFM2 also
 changes the convolution (centred taps), not just the mask. Conv biases, unmerged adapters
 and aliased parameters are rejected before any mutation.
+An explicit `config.is_causal=False` is refused even with `validate=False`. Single-row
+left-padded calls fall back to HF: its short convolution skips padding masking for one
+row, so stripping those pads could change real-token outputs.
 
 Pack-time validation holds eager, input-embedding and graphed output alike to the model's own
 forward (per-token cosine mean ≥ 0.999, min ≥ 0.98). Graphs are not compared with eager: a
@@ -426,6 +429,13 @@ speedup over stock HF in parentheses:
 | 256 tokens, 8 | 80% | 77.4 | 64.6 | 28.6 (2.7x) | 17.1 (4.5x) | 29.1 |
 | 1,024 tokens, 8 | 85% | 285.1 | 238.4 | 39.6 (7.2x) | 38.3 (7.4x) | 40.2 |
 | 2,048 tokens, 16 | 93% | 1,290.1 | 1,002.7 | 81.8 (15.8x) | 81.5 (15.8x) | 85.8 |
+
+The graph columns above describe the requested setting. With the benchmark's default
+graph bounds (`max_seq=2048`, `max_tokens=16384`), the 2,048-token state plus questions
+exceeds the shared graph bounds and runs eagerly. New benchmark results include an
+`execution` entry for each variant, measured in an untimed parity call, and speedups
+per variant. The aggregate speedup identifies the fastest variant rather than assuming
+the default graph-enabled path was fastest.
 
 As for Qwen3.5, token-id batches replay the shared pass as one CUDA graph per plan
 (`runtime.shared_graphs`), matching the eager pass: it pays where launch overhead matters (a

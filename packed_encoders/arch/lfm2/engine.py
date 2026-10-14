@@ -78,7 +78,7 @@ class Lfm2Engine:
                  pieces=None):
         from packed_encoders.arch.lfm2.pieces import default_pieces
 
-        if not causal:
+        if not causal or not getattr(text_model.config, "is_causal", True):
             # A bidirectional LFM2 also changes the convolution (centred taps), not just the mask.
             raise UnsupportedTargetError("the LFM2 engine runs causal backbones only")
         self.composition = pieces or default_pieces()

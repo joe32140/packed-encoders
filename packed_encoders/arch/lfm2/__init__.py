@@ -189,6 +189,10 @@ def _hf_rows(state: Lfm2State, input_ids, embeds, attention_mask, args, kwargs) 
     lengths, right, left = flat[:B], flat[B:2 * B], flat[2 * B:]
     if min(lengths) == 0 or not all(r or l for r, l in zip(right, left)):
         return None          # an empty row, or a mask with holes
+    if B == 1 and not right[0]:
+        # HF skips masking short-conv inputs for a single row. Left pads can therefore
+        # contribute to its first real tokens; removing them would change the result.
+        return None
     return lengths, [0 if r else S - n for n, r in zip(lengths, right)]
 
 
@@ -202,7 +206,8 @@ def _make_hf_forward(module: nn.Module, state: Lfm2State):
             if not state.fallback_warned:
                 state.fallback_warned = True
                 warnings.warn("packed-encoders: this call runs the model's original forward (gradients, a KV cache "
-                              "or use_cache, position_ids, extra outputs or a mask with holes)", stacklevel=2)
+                              "or use_cache, position_ids, extra outputs, single-row left padding or a mask with holes)",
+                              stacklevel=2)
             if embeds is not None:
                 kwargs["inputs_embeds"] = embeds
             return state.original_forward(input_ids, attention_mask, *args, **kwargs)
