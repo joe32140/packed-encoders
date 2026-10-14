@@ -38,7 +38,7 @@ Check the [benchmark section](#benchmarks) for the full tables.
 > [!NOTE]  
 > ModernBERT backbones at `hidden_size` divisible by 256 are supported, this includes the obvious [ModernBERT](https://huggingface.co/answerdotai/ModernBERT-base) but also: any encoder trained with the same architecture (such as [Ettin](https://huggingface.co/jhu-clsp/ettin-encoder-1b) or [mmBERT](https://huggingface.co/jhu-clsp/mmBERT-base)), late-interaction encoders trained with ModernBERT as the base (such as [ModernColBERT](https://huggingface.co/lightonai/GTE-ModernColBERT-v1)) and any finetunes that sit on top of those. The package offers a `validate()` function to check compatibility.
 >
-> Qwen3.5 hybrid backbones (GatedDeltaNet + gated attention) are the second architecture: [topk-embed-v1-xsmall and -small](https://huggingface.co/topk-io). See [docs/architectures.md](docs/architectures.md) for how architectures plug in.
+> Qwen3.5 hybrid backbones (GatedDeltaNet + gated attention) are the second architecture: [topk-embed-v1-xsmall and -small](https://huggingface.co/topk-io). [EmbeddingGemma 2](https://huggingface.co/google/embeddinggemma-2) (sliding-window and global bidirectional attention, post-norm blocks) packs too. See [docs/architectures.md](docs/architectures.md) for how architectures plug in.
 
 &nbsp;
 
@@ -69,6 +69,7 @@ uv sync --locked --no-dev                                # base runtime
 uv sync --locked --no-dev --extra fa2                     # compiled FA2, including RTX 5090
 uv sync --locked --no-dev --extra fa2 --extra pylate       # PyLate / ModernColBERT
 uv sync --locked --no-dev --extra qwen3_5 --extra fa2      # topk-embed-v1, complete environment
+uv sync --locked --no-dev --extra embedding_gemma2 --extra fa2  # EmbeddingGemma 2
 uv sync --locked --no-dev --extra fa4                     # CuteDSL FA4 on sm_90 / sm_100
 ```
 
@@ -95,6 +96,9 @@ uv pip install --no-sources --torch-backend cu128 \
   SentenceTransformers 5.3, while topk uses 6.x. Request the extras individually;
   `--all-extras` is intentionally invalid. The `sentence-transformers` extra can
   be combined with either.
+- The **`embedding_gemma2` extra selects Transformers 5.19** (the first release
+  with EmbeddingGemma 2) and timm, which its multimodal wrapper imports. It needs
+  its own environment too: PyLate caps Transformers at 5.3, and `qwen3_5` pins 5.9.
 - FlashAttention is optional: the packed Triton kernel ships in-tree and SDPA
   needs no extra dependency. On large token budgets FA is heavily recommended.
   The FA4 GPU paths still require validation on their target hardware; the local

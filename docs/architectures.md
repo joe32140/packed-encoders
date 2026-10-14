@@ -334,3 +334,80 @@ batch's leading tokens once per call, when at least two rows are longer than
 `min_shared_prefix`. `validate()` checks the shared pass against the model's own forward even
 while sharing is off and reports `shared_cos_mean` / `shared_cos_min`;
 `shared_prefix_rejected` says why a model can't share.
+## EmbeddingGemma 2
+
+`EmbeddingGemma2` packs EmbeddingGemma 2 text backbones: 24 bidirectional GQA layers, sliding
+(|q − k| ≤ 512, head dim 256, two KV heads) except every sixth, which is global (head dim 512, one
+KV head), with attention scale 1 and RMSNorm on queries, keys and values; post-norm ("sandwich")
+blocks around attention, a tanh-GELU GeGLU MLP and a per-layer-embedding (PLE) block, each layer
+ending in a learned scalar; and a per-token output projection (512 → 768) after the final norm.
+Norms scale by `weight` (no `1 +`).
+
+`HFEmbeddingGemma2Adapter` binds the text backbone (`EmbeddingGemma2TextModel`) as the weight
+source. Its patch target is the multimodal wrapper (`EmbeddingGemma2Model`, which `AutoModel` and
+SentenceTransformers load) when it is given one, else the backbone. The wrapper always calls the
+backbone with `inputs_embeds`, so the patched wrapper takes text-only calls itself with the ids it
+was given, mapping image, video and audio placeholders to padding as the wrapper does. Each patched
+forward keeps its module's contract: `input_ids` (or, at the backbone, `inputs_embeds`) plus
+`attention_mask`, right or left padded, in; `last_hidden_state` out, pads as zeros. Pooling and
+normalization run unchanged.
+
+```python
+st = SentenceTransformer("google/embeddinggemma-2", device="cuda", model_kwargs={"dtype": torch.bfloat16})
+pe.pack(st)                                    # patches the EmbeddingGemma2Model inside
+queries = st.encode_query(texts, batch_size=32)
+```
+
+Token-id batches replay CUDA graphs when they fit a bucket, else run the eager packed engine;
+input-embedding batches at the backbone run eagerly. Image, video or audio inputs, gradients,
+explicit `position_ids`, extra outputs and masks with holes run the original forward unchanged.
+Bidirectional models never share prefixes.
+
+`EmbeddingGemma2Pieces` selects 7 pieces: projection; RMSNorm over rows (the input norm, the PLE
+norm with its input scale rounded first, and the unscaled V norm); the post-norm add (`residual +
+RMSNorm(delta) * w`, times the layer scalar, then the next block's input norm, in one launch); the
+tanh-GELU gate; paired Q/K RMSNorm + RoPE; and packed and segmented-padded attention. q|k|v and
+gate|up are merged GEMMs sharing the HF parameters' storage; fp32 norm and scalar copies refresh
+after in-place updates (`sync_norms`). Attention is chosen per kind: each choice carries its window
+and scale, and the pack-time probe runs rows longer than twice the window, so a kernel that ignores
+the window, or is off by one, is rejected. On an RTX 4090 the sliding layers select FlashAttention 2
+and the global layers (head dim 512, beyond its limit) SDPA. Biases, unmerged adapters, other
+activations and causal configs are rejected before any mutation.
+
+Pack-time validation holds eager, input-embedding and graphed output to the model's own forward by
+the per-token cosine mean only (≥ 0.99): the output projection amplifies bf16 rounding on a few
+tokens, so the model's own bf16 forward is far from its fp32 forward on those tokens. Measured on
+the validation batches (random ids, rows of 7/129/1,100/64 and 3/21/600 tokens), per-token cosine
+mean (min):
+
+| Forward | vs stock bf16 | vs fp32 |
+|---|---|---|
+| Stock bf16 | — | 0.99607 (0.861), 0.99637 (0.822) |
+| Packed engine | 0.99447 (0.803), 0.99490 (0.873) | 0.99570 (0.709), 0.99424 (0.852) |
+| No sliding window | 0.79164, 0.96192 | 0.79319, 0.96349 |
+| No V norm | 0.65285, 0.62541 | 0.65474, 0.62624 |
+| Layer scalar ignored | 0.14404, 0.14314 | 0.14411, 0.14379 |
+
+A window of 511 instead of 512 scores like the engine here (it drops only the keys exactly 512
+tokens away); the attention probe catches it. On real text the pooled, normalized embeddings match stock at cosine
+≥ 0.99986.
+
+Measured on google/embeddinggemma-2, RTX 4090, torch 2.11, transformers 5.19, FlashAttention 2,
+random rows, ms per batch:
+
+| Batch | Padding | Stock HF (sdpa, padded) | Packed, eager | Packed, graphs | Speedup |
+|---|---|---|---|---|---|
+| 1 × 128 tokens | 0% | 33.0 | 12.4 | 2.0 | 16.2x |
+| 8 rows, 32–512 tokens | 47% | 32.1 | 20.8 | 13.4 | 2.40x |
+| 32 rows, 32–512 tokens | 39% | 127.9 | 49.7 | 39.5 | 3.24x |
+| 8 × 1,024 tokens | 0% | 66.8 | 39.8 | 33.5 | 2.00x |
+
+```bash
+python benchmarks/hf_forward_bench.py --model google/embeddinggemma-2 --out forward.json
+```
+
+Unlike the hybrids, graphs win every batch here: the model is small (137M parameters in the
+backbone, without the embedding table), so even a 32-row batch is partly launch bound. End to end
+through `SentenceTransformer.encode` at batch 32 (tokenization included, same GPU), 2,048 queries
+of 6–25 words ran at 806/s stock and 3,326/s packed (4.12x), and 512 documents of 60–960 words at
+103/s and 279/s (2.71x).

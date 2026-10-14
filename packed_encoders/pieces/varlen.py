@@ -5,11 +5,11 @@ from packed_encoders.errors import UnsupportedTargetError
 from packed_encoders.pieces.base import Contract, Piece
 
 PACKED = Contract("varlen_attention", "q [T,H,D], k,v [T,KV,D], cu32, host lengths -> [T,H,D]",
-                  "same-length Q/K segments; GQA; optional causal mask; zero dropout; scale D**-0.5", autograd=False)
+                  "same-length Q/K segments; GQA; optional causal mask; the choice's local window and scale (default D**-0.5); zero dropout", autograd=False)
 PADDED = Contract("segmented_padded_attention", "q [B*S,H,D], k,v [B*S,KV,D], static segments -> [B*S,H,D]",
-                  "each row split into real/pad segments; GQA; optional causal mask; zero dropout; scale D**-0.5", autograd=False)
+                  "each row split into real/pad segments; GQA; optional causal mask; the choice's local window and scale (default D**-0.5); zero dropout", autograd=False)
 PREFIXED = Contract("prefixed_varlen_attention", "q [Tq,H,D], k,v [Tk,KV,D], cu_q32, cu_k32, max_q, max_k, host lengths_q, lengths_k -> [Tq,H,D]",
-                    "query segment i is the last lengths_q[i] tokens of key segment i; GQA; causal mask aligned to the segment end; zero dropout; scale D**-0.5", autograd=False)
+                    "query segment i is the last lengths_q[i] tokens of key segment i; GQA; causal mask aligned to the segment end; the choice's local window and scale (default D**-0.5); zero dropout", autograd=False)
 
 
 def _check(q, k, v):
@@ -39,17 +39,17 @@ def check_prefixed(choice, q, k, v, cu_q, cu_k, max_q, max_k, lengths_q, lengths
 
 def reference_packed(choice, q, k, v, cu32, max_len, lengths, causal):
     from packed_encoders.runtime.attention import _reference
-    return _reference(q, k, v, list(lengths), causal).to(q.dtype)
+    return _reference(q, k, v, list(lengths), causal, choice.window, choice.scale).to(q.dtype)
 
 
 def reference_padded(choice, q, k, v, static, causal):
     from packed_encoders.runtime.attention import _sdpa
-    return _sdpa()[1](q.float(), k.float(), v.float(), static, causal).to(q.dtype)
+    return _sdpa(choice.window, choice.scale)[1](q.float(), k.float(), v.float(), static, causal).to(q.dtype)
 
 
 def reference_prefixed(choice, q, k, v, cu_q, cu_k, max_q, max_k, lengths_q, lengths_k, causal):
     from packed_encoders.runtime.attention import reference_prefixed as ref
-    return ref(q, k, v, lengths_q, lengths_k, causal).to(q.dtype)
+    return ref(q, k, v, lengths_q, lengths_k, causal, choice.window, choice.scale).to(q.dtype)
 
 
 def attention_pieces():
