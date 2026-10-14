@@ -10,7 +10,7 @@ dependencies = [
     # CPU Torch omits Triton; CUDA Torch selects its matching version transitively.
     "triton>=3.6,<3.7",
     # Bound the HF internals used by the adapters to the validated minor series.
-    "transformers>=4.45,<5.10",
+    "transformers>=4.45,<5.20",
     "nvidia-cutlass-dsl>=4.5.2,<4.6",
 ]
 
@@ -26,6 +26,11 @@ qwen3_5 = [
     "sentence-transformers>=6.1,<7",
     "torchvision>=0.26,<0.27",
 ]
+# EmbeddingGemma 2 arrived in transformers 5.19; its multimodal wrapper imports timm.
+embedding_gemma2 = [
+    "transformers>=5.19,<5.20",
+    "timm>=1.0",
+]
 
 [build-system]
 requires = ["hatchling"]
@@ -36,7 +41,13 @@ packages = ["packed_encoders"]
 
 [tool.uv]
 # PyLate currently pins SentenceTransformers 5.3; topk needs MultiVectorEncoder 6.x.
-conflicts = [[{ extra = "pylate" }, { extra = "qwen3_5" }]]
+# EmbeddingGemma 2 needs transformers 5.19: PyLate caps it at 5.3, and qwen3_5 pins 5.9, where
+# topk-embed-v1's remote code is validated (it fails under 5.18).
+conflicts = [
+    [{ extra = "pylate" }, { extra = "qwen3_5" }],
+    [{ extra = "pylate" }, { extra = "embedding_gemma2" }],
+    [{ extra = "qwen3_5" }, { extra = "embedding_gemma2" }],
+]
 
 [[tool.uv.index]]
 name = "pytorch-cu128"
