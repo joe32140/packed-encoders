@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 from contextlib import ExitStack
+from dataclasses import replace
 import json
 import statistics
 import time
@@ -59,7 +60,7 @@ def workloads(vocab, states, questions):
 
 
 @torch.no_grad()
-def ms(fn, trials):
+def ms(fn, trials, *, samples=None):
     for _ in range(3):                                       # warmup, graph capture
         fn()
     torch.cuda.synchronize()
@@ -69,6 +70,8 @@ def ms(fn, trials):
         fn()
         torch.cuda.synchronize()
         times.append(time.perf_counter() - t0)
+    if samples is not None:
+        samples.extend(1e3 * t for t in times)
     return 1e3 * statistics.median(times)
 
 
@@ -117,6 +120,9 @@ def main() -> None:
     ap.add_argument("--questions", type=int, nargs="+", default=[8, 8, 16])
     ap.add_argument("--min-prefix", type=int, default=64)
     ap.add_argument("--trials", type=int, default=10)
+    ap.add_argument("--skip-validation", action="store_true", help="skip pack-time certification; parity is still reported")
+    ap.add_argument("--graph-max-seq", type=int, help="override graph bounds explicitly (default: 2048)")
+    ap.add_argument("--graph-max-tokens", type=int, help="override graph bounds explicitly (default: 16384)")
     a = ap.parse_args()
     if len(a.state) != len(a.questions):
         raise SystemExit("--state and --questions pair up: give as many of each")
@@ -127,6 +133,7 @@ def main() -> None:
     from packed_encoders.arch import registered
     from packed_encoders.arch.weights import validation_ids_below
     from packed_encoders.locate import select_engine
+    from packed_encoders.runtime.graphs import PaddedGraphConfig
 
     engine = None
     if a.engine:
@@ -149,17 +156,37 @@ def main() -> None:
            "batches": {}}
     data = workloads(validation_ids_below(cfg), a.state, a.questions)
     stock = {}
+    stock_samples = {}
     with torch.no_grad():
         for name, (_, (ids, mask)) in data.items():          # the model's own forward, before pack
+            samples = stock_samples[name] = []
             stock[name] = (hidden(target, ids, mask)[mask.bool()].float(),
-                           ms(lambda: hidden(target, ids, mask), a.trials))
+                           ms(lambda: hidden(target, ids, mask), a.trials, samples=samples))
 
-    pe.pack(model, engine=engine)
+    graph_config = PaddedGraphConfig()
+    if a.graph_max_seq is not None:
+        graph_config = replace(graph_config, max_seq=a.graph_max_seq)
+    if a.graph_max_tokens is not None:
+        graph_config = replace(graph_config, max_tokens=a.graph_max_tokens)
+    options = {"engine": engine, "validate": not a.skip_validation}
+    if a.graph_max_seq is not None or a.graph_max_tokens is not None:
+        options["cuda_graph"] = graph_config
+    pe.pack(model, **options)
     packed = pe.get_engine(model)
     rep = getattr(packed.state, "report", None)
-    shares = hasattr(packed, "min_shared_prefix") and not getattr(rep, "shared_prefix_rejected", "unsupported")
-    res["pack"] = {"attention": getattr(rep, "attention_backend", None), "shares_prefixes": shares,
-                   "shared_prefix_rejected": getattr(rep, "shared_prefix_rejected", None)}
+    rejection = getattr(rep, "shared_prefix_rejected",
+                        getattr(getattr(packed.state, "engine", None), "share_rejected", "unsupported"))
+    shares = hasattr(packed, "min_shared_prefix") and not rejection
+    selected_attention = getattr(rep, "attention_backend", None)
+    if selected_attention is None:
+        choices = getattr(getattr(packed.state, "engine", None), "attention", None)
+        selected_attention = ({k: v.name for k, v in choices.items()} if isinstance(choices, dict)
+                              else getattr(choices, "name", None))
+    res["pack"] = {"attention": selected_attention, "shares_prefixes": shares,
+                   "shared_prefix_rejected": rejection, "validated": rep is not None,
+                   "graph_bounds": ({"max_seq": graph_config.max_seq, "max_tokens": graph_config.max_tokens}
+                                    if isinstance(getattr(getattr(packed.state, "runner", None), "config", None),
+                                                  PaddedGraphConfig) else None)}
     print(f"{a.model} | {res['engine']} on {res['target']} | {res['gpu']} | attention {res['pack']['attention']} | "
           f"shared prefixes: {shares}", flush=True)
     for name, (kind, (ids, mask)) in data.items():
@@ -172,12 +199,13 @@ def main() -> None:
         if wrapper is not None:
             variants["wrapper"] = (wrapper, True, share)
         row = {"kind": kind, "rows": ids.shape[0], "tokens": int(real.sum()), "padding": 1 - real.float().mean().item(),
-               "ms": {"stock": t_stock}, "parity": {}, "execution": {}}
+               "ms": {"stock": t_stock}, "samples_ms": {"stock": stock_samples[name]}, "parity": {}, "execution": {}}
         for variant, (m, graphs, min_prefix) in variants.items():
             if shares:
                 packed.min_shared_prefix = min_prefix
             with torch.no_grad() if graphs else pe.no_cuda_graph(model):
-                row["ms"][variant] = ms(lambda: hidden(m, ids, mask), a.trials)
+                samples = row["samples_ms"][variant] = []
+                row["ms"][variant] = ms(lambda: hidden(m, ids, mask), a.trials, samples=samples)
                 with torch.no_grad():
                     output, execution = record_execution(packed, lambda: hidden(m, ids, mask))
                     row["execution"][variant] = execution

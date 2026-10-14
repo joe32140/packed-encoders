@@ -45,3 +45,32 @@ def short_conv(x: Tensor, weight: Tensor, pos: Tensor) -> Tensor:
         _short_conv_kernel[(triton.cdiv(D, BD), triton.cdiv(N, BT))](
             x, weight, pos, y, x.stride(0), N, D=D, KW=KW, BT=BT, BD=BD, num_warps=4)
     return y
+
+
+@triton.jit
+def _continue_conv_kernel(X, W, ROWS, TAPS, Y, stride_x, stride_yt, stride_yd,
+                          D: tl.constexpr, KW: tl.constexpr, BD: tl.constexpr):
+    f = tl.program_id(0)
+    d = tl.program_id(1) * BD + tl.arange(0, BD)
+    acc = tl.zeros((BD,), dtype=tl.float32)
+    for k in tl.static_range(KW):
+        row = tl.load(TAPS + f * KW + k)
+        b = tl.load(X + row * stride_x + d, mask=d < D, other=0.).to(tl.float32)
+        x = tl.load(X + row * stride_x + 2 * D + d, mask=d < D, other=0.).to(tl.float32)
+        bx = (b * x).to(Y.dtype.element_ty).to(tl.float32)
+        weight = tl.load(W + d * KW + k, mask=d < D, other=0.).to(tl.float32)
+        acc += bx * weight
+    row = tl.load(ROWS + f)
+    c = tl.load(X + row * stride_x + D + d, mask=d < D, other=0.).to(tl.float32)
+    conv = acc.to(Y.dtype.element_ty).to(tl.float32)
+    tl.store(Y + row * stride_yt + d * stride_yd, (c * conv).to(Y.dtype.element_ty), mask=d < D)
+
+
+def continue_conv(proj: Tensor, weight: Tensor, y: Tensor, rows: Tensor, taps: Tensor) -> None:
+    """Correct only the child boundary rows, using their planned root/child tap indices."""
+    if rows.numel():
+        D, KW = weight.shape
+        if taps.shape != (rows.numel(), KW):
+            raise ValueError("a convolution boundary needs one full tap window per output row")
+        _continue_conv_kernel[(rows.numel(), triton.cdiv(D, 256))](
+            proj, weight, rows, taps, y, proj.stride(0), y.stride(0), y.stride(1), D=D, KW=KW, BD=256)

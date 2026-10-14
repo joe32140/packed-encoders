@@ -7,7 +7,7 @@ Same math as the model, fewer and fatter kernels:
 - the gated short conv `C * conv(B * x)` in one Triton launch reading the in-projection in place,
   positions restarting per sequence (`pieces.hybrid.SHORT_CONV`), so packed rows never mix.
 - q/k RMSNorm + RoPE in one launch reading the q|k|v projection in place; varlen attention chosen
-  by probe (runtime.attention); fla residual-add + RMSNorm and a Triton SwiGLU.
+  by probe (runtime.attention); inference residual-add + RMSNorm and a Triton SwiGLU.
 
 LFM2's RMSNorm scales by `weight` (no `1 +`); the fused norms take fp32 copies of the weights,
 tracked by `sync_norms` like the Qwen3.5 engine's.
@@ -231,12 +231,9 @@ class Lfm2Engine:
     def _continue_conv(self, L: _Layer, proj: Tensor, y: Tensor, sh: _Shared) -> None:
         """The packed conv restarts at each segment; a child's first K-1 tokens redo theirs over
         their root's last tokens, rounding where the kernel does (B * x, the conv, the gate), in place."""
-        D = L.conv_w.shape[0]
-        taps = proj.index_select(0, sh.fix_taps.view(-1)).view(*sh.fix_taps.shape, -1)
-        bx = (taps[..., :D].float() * taps[..., 2 * D: 3 * D].float()).to(y.dtype).float()
-        conv = torch.einsum("fkc,ck->fc", bx, L.conv_w.float()).to(y.dtype).float()
-        c = proj.index_select(0, sh.fix_rows)[:, D: 2 * D].float()
-        y.index_copy_(0, sh.fix_rows, (c * conv).to(y.dtype))
+        from packed_encoders._kernels.short_conv import continue_conv
+
+        continue_conv(proj, L.conv_w, y, sh.fix_rows, sh.fix_taps)
 
     def _attn(self, L: _Layer, h: Tensor, lay: _Layout) -> Tensor:
         N, nq, nkv, hd = h.shape[0], L.nq, L.nkv, L.hd

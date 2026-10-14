@@ -105,12 +105,16 @@ class Lfm2Pieces:
 
 
 def default_pieces():
+    from packed_encoders._kernels.inference_norm import rms_norm, add_rms_norm
+    from packed_encoders.pieces.hybrid import RMS, ADD_RMS, ref_rms, ref_add_rms, check_rms, check_add_rms
     from packed_encoders.pieces.hybrid import default_numerical, short_conv_piece
     from packed_encoders.pieces.varlen import attention_pieces
 
     numerical = default_numerical()
     packed, padded, prefixed = attention_pieces()
-    return Lfm2Pieces(linear=numerical["linear"], rms_norm=numerical["rms_norm"],
-                      add_rms_norm=numerical["add_rms_norm"], swiglu=numerical["swiglu"],
+    return Lfm2Pieces(linear=numerical["linear"],
+                      rms_norm=Piece("triton-inference-rms-norm", RMS, rms_norm, ref_rms, check_rms),
+                      add_rms_norm=Piece("triton-inference-add-rms-norm", ADD_RMS, add_rms_norm, ref_add_rms, check_add_rms),
+                      swiglu=numerical["swiglu"],
                       short_conv=short_conv_piece(), qk_norm_rope_pair=numerical["qk_norm_rope_pair"],
                       attention_packed=packed, attention_padded=padded, attention_prefixed=prefixed)
