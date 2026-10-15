@@ -375,13 +375,29 @@ left-padded calls fall back to HF: its short convolution skips padding masking f
 row, so stripping those pads could change real-token outputs.
 
 Pack-time validation holds eager, input-embedding and graphed output alike to the model's own
-forward (per-token cosine mean ≥ 0.999, min ≥ 0.98). Graphs are not compared with eager: a
+forward (per-token cosine mean ≥ 0.99, min ≥ 0.85). Graphs are not compared with eager: a
 bucket's padded GEMMs round differently, and over a deep stack two bf16 paths drift apart more
-than either drifts from fp32. On d1-3B (30 layers, L40S), against an fp32 forward: stock bf16
-0.99826 mean, eager 0.99868, graphed 0.99870 (bitwise the padded layout run eagerly), graphed vs
-eager 0.99936.
+than either drifts from fp32. The gate is loose because it compares two valid bf16 paths, and on
+a 30-layer model they separate further than either separates from fp32: on d1-3B the engine is
+*closer* to an fp32 forward than the model's own bf16 forward is, on both validation batches
+(RTX 4090, flash2; rows 7/129/300/64: stock 0.99805 mean, engine 0.99832; rows 3/21/30: stock 0.99916,
+engine 0.99940), while engine against stock bf16 reads 0.99909 and 0.99891. Replayed from a
+graph the short batch reads 0.99697/0.91294, the one path that does drift further than stock,
+since a bucket pads every row and the GEMMs change shape. An earlier 0.999 mean gate therefore
+refused d1-3B on an RTX 4090 and an RTX 5090 while passing on an L40S. The thresholds are set
+from what a broken engine scores, not from how close a correct one lands on one device.
+Structural errors stay far outside the loosened gate — deliberately breaking one piece at a
+time, engine against stock bf16 on those batches:
 
-Measured on LiquidAI/d1-3B's backbone (an LFM2-VL checkpoint, 2048 hidden, 30 layers, 10 of them
+| Engine | mean cosine, rows 7/129/300/64 | mean cosine, rows 3/21/30 |
+|---|---|---|
+| Correct | 0.99909 | 0.99891 |
+| Convolution positions never restart per row | 0.71970 | 0.55188 |
+| RoPE rotation removed | 0.68983 | 0.92181 |
+| SwiGLU gate and value swapped | 0.19642 | 0.28816 |
+| Norm scales dropped | 0.01841 | 0.02100 |
+
+Measured on LiquidAI/d1-3B's backbone (an LFM2-VL checkpoint, 2048 hidden, 30 layers, 8 of them
 attention), L40S, torch 2.11, torch varlen attention (no flash-attn), random rows, ms per batch:
 
 | Batch | Padding | Stock HF (sdpa, padded) | Packed, eager | Packed, graphs | Speedup |
