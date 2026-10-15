@@ -103,6 +103,7 @@ class PaddedGraphRunner:
         self.config = config or PaddedGraphConfig()
         self._cache: OrderedDict[tuple[int, int], _Captured] = OrderedDict()
         self._pool = None
+        self._stream: torch.cuda.Stream | None = None
         self._out: Tensor | None = None
         self._stager = PinnedStager(engine.device)
 
@@ -269,6 +270,10 @@ class PaddedGraphRunner:
         if self._pool is None:
             self._pool = torch.cuda.graph_pool_handle()
             self._out = torch.empty(self.config.max_tokens, eng.hidden_size, device=dev, dtype=eng.dtype)
+            # One stream for every warmup and capture. The caching allocator reuses a freed block only on
+            # the stream that allocated it, so a new stream per capture strands each graph's activations in
+            # the shared pool: 61 document buckets on topk-embed-v1-small held 9.5 GB, none of it live.
+            self._stream = torch.cuda.Stream(device=dev)
         # Capture with every row split half real / half pad so both segments are non-empty.
         half = torch.arange(2 * rows + 1, device=dev, dtype=torch.int32).mul_(seq).div_(2, rounding_mode="floor")
         static = PaddedStatic(
@@ -279,7 +284,7 @@ class PaddedGraphRunner:
         )
         with torch.inference_mode():
             eng.prepare_static(static)
-            side = torch.cuda.Stream()
+            side = self._stream
             side.wait_stream(torch.cuda.current_stream())
             with torch.cuda.stream(side):
                 for _ in range(self.config.warmup):   # autotune + allocator warmup, off-graph
