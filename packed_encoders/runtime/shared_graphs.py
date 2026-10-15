@@ -16,13 +16,15 @@ class CapturedForward:
     """Fixed-address inputs and output; callers clone the output before the next replay.
 
     `retain`, when given, runs after warmup and its result is kept for the graph's lifetime:
-    engines whose kernels cache launch metadata outside the graph pool pin it there."""
+    engines whose kernels cache launch metadata outside the graph pool pin it there. Graphs that
+    share a `pool` must also share a `stream`: the caching allocator reuses a freed block only on
+    the stream that allocated it."""
 
     @torch.inference_mode()
-    def __init__(self, engine, count, forward, *, retain=None, warmup=2, pool=None):
+    def __init__(self, engine, count, forward, *, retain=None, warmup=2, pool=None, stream=None):
         with torch.cuda.device(engine.device):
             self.ids = torch.zeros(count, dtype=torch.long, device=engine.device)
-            side = torch.cuda.Stream(device=engine.device)
+            side = stream if stream is not None else torch.cuda.Stream(device=engine.device)
             side.wait_stream(torch.cuda.current_stream())
             with torch.cuda.stream(side):
                 for _ in range(max(2, warmup)):
@@ -50,6 +52,7 @@ class SharedGraphRunner:
         self.engine, self.config = engine, config
         self._cache = OrderedDict()
         self._pool = None
+        self._stream = None
 
     @property
     def num_graphs(self):
@@ -78,9 +81,11 @@ class SharedGraphRunner:
             if entry is None:
                 if self._pool is None:
                     self._pool = torch.cuda.graph_pool_handle()
+                    self._stream = torch.cuda.Stream(device=self.engine.device)
                 static = self.engine.prepare_shared_layout(plan)
                 cap = CapturedForward(self.engine, ids.numel(), lambda x: self.engine.shared_core(x, static),
-                                      retain=lambda: self._retain(static), warmup=cfg.warmup, pool=self._pool)
+                                      retain=lambda: self._retain(static), warmup=cfg.warmup, pool=self._pool,
+                                      stream=self._stream)
                 entry = (cap, static)  # retain every metadata tensor used by the graph
                 self._cache[key] = entry
                 while len(self._cache) > cfg.max_graphs:

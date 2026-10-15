@@ -395,6 +395,41 @@ def test_norms_trained_after_packing_reach_eager_and_captured_graphs(tiny):
         unshare_rows(eng.shared)
 
 
+def test_graphs_share_one_pool_and_replay_independently(tiny):
+    """Every bucket captures on the runner's one stream, so the shared pool holds about one bucket's
+    activations however many graphs it serves (a stream per capture stranded each graph's: the caching
+    allocator reuses a block only on its own stream), and graphs reusing each other's memory still
+    replay exactly, in any order."""
+    from packed_encoders.arch.qwen3_5.engine import Qwen35Engine, unshare_rows
+    from packed_encoders.runtime.graphs import PaddedGraphConfig, PaddedGraphRunner
+
+    def pool_bytes(pool):
+        return sum(seg["total_size"] for seg in torch.cuda.memory_snapshot()
+                   if tuple(seg.get("segment_pool_id", (0, 0))) == tuple(pool))
+
+    eng = Qwen35Engine(tiny, causal=True)
+    try:
+        g = torch.Generator().manual_seed(3)
+        runner = PaddedGraphRunner(eng, PaddedGraphConfig(row_buckets=(1, 2, 4, 8), max_seq=512, max_tokens=512,
+                                                          split_overhead_tokens=None))
+        batches = [[496], [240, 200], [120, 100, 90, 110], [60] * 8, [250, 31], [64, 20, 50, 9]]   # 6 buckets
+        inputs = [(torch.randint(0, 1024, (sum(ls),), generator=g).cuda(), ls) for ls in batches]
+        outs = []
+        for i, (ids, ls) in enumerate(inputs):
+            outs.append(runner(ids, ls).clone())
+            if i == 0:
+                first = pool_bytes(runner._pool)
+        assert runner.num_graphs == len(batches)
+        assert pool_bytes(runner._pool) - first <= first // 2, (first, pool_bytes(runner._pool))
+        for (ids, ls), out in reversed(list(zip(inputs, outs))):          # replay order != capture order
+            assert torch.equal(runner(ids, ls), out)
+        for (ids, ls), out in zip(inputs, outs):
+            cos = F.cosine_similarity(out.float(), eng.forward_packed(ids, ls).float(), dim=-1)
+            assert cos.mean().item() > 0.9995 and cos.min().item() > 0.99, (ls, cos.mean().item(), cos.min().item())
+    finally:
+        unshare_rows(eng.shared)
+
+
 @pytest.mark.skipif(torch.cuda.device_count() < 2, reason="needs two GPUs")
 def test_engine_runs_on_its_weights_device_not_the_current_one(tiny):
     from packed_encoders.arch.qwen3_5.engine import Qwen35Engine, unshare_rows
