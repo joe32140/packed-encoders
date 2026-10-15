@@ -43,7 +43,15 @@ MIN_CAPABILITY = (8, 0)   # bf16 tensor cores; the Triton kernels target sm_80+
 # cosine over real tokens, bf16 vs bf16, for eager and graphed alike. Graphs are not held to
 # eager: a bucket's padded GEMMs round differently, and over a deep stack two bf16 paths drift
 # apart more than either drifts from fp32 (measurements: docs/architectures.md, LFM2).
-MEAN_COS, MIN_COS = 0.999, 0.98
+# The gate is therefore loose, and set from what a broken engine scores rather than from how
+# close a correct one happens to land on one device. On d1-3B the engine is closer to an fp32
+# forward than the model's own bf16 forward is, yet the two bf16 paths sit 0.9989 apart on the
+# short validation batch (0.9970 replayed from a graph, which pads every row to its bucket and
+# so changes the GEMM shapes), and a 0.999 mean refused that checkpoint on an RTX 4090 and a
+# 5090 while passing on an L40S. Breaking one piece at a time on the same batches scores 0.0184
+# to 0.9218 by mean and 0.064 to 0.643 by minimum, so these thresholds keep a margin of about
+# 0.07 and 0.21 to a real error (measurements: docs/architectures.md, LFM2).
+MEAN_COS, MIN_COS = 0.99, 0.85
 _BACKENDS = {None: None, "auto": None, "flash": ("flash4", "flash2", "torch_varlen"), "sdpa": ("sdpa",)}
 
 
