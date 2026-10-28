@@ -1,6 +1,7 @@
 """Any model `pack()` supports, through its HF forward: latency and parity against the model's own forward.
 
     python benchmarks/hf_forward_bench.py --model <model id> --out forward.json [--engine qwen3_5|lfm2|...]
+                                         [--trust-remote-code]   # a checkpoint that ships its modeling code
 
 `AutoModel` loads the checkpoint; the registry picks the engine (`--engine` overrides it) and the
 module it patches, which this script times with token ids. When the loaded model wraps that module
@@ -16,6 +17,7 @@ Per batch, ms (median of `--trials` passes after a warmup that also captures gra
   shared_graphs  `min_shared_prefix = --min-prefix`, graphs on (shared batches, engines that share)
   shared_eager   the same, graphs off
   wrapper        the loaded model, pack's defaults (sharing on for shared batches), when it wraps the target
+                 and returns `last_hidden_state` (a wrapper with its own head is skipped, and the JSON says so)
 These names describe requested modes. `execution` records the path actually used in an
 untimed parity call, including eager fallback for inputs outside the graph bounds.
 Parity per real token: per-token cosine of each packed variant against stock.
@@ -116,6 +118,7 @@ def main() -> None:
     ap.add_argument("--model", required=True)
     ap.add_argument("--out", required=True)
     ap.add_argument("--engine", help="a registered engine name; default: the registry's choice")
+    ap.add_argument("--trust-remote-code", action="store_true", help="load modeling code shipped with the checkpoint")
     ap.add_argument("--state", type=int, nargs="+", default=[256, 1024, 2048])
     ap.add_argument("--questions", type=int, nargs="+", default=[8, 8, 16])
     ap.add_argument("--min-prefix", type=int, default=64)
@@ -140,7 +143,8 @@ def main() -> None:
         engine = next((e for e in registered() if e.name == a.engine), None)
         if engine is None:
             raise SystemExit(f"no engine {a.engine!r}; registered: {[e.name for e in registered()]}")
-    model = AutoModel.from_pretrained(a.model, dtype=torch.bfloat16).to("cuda").eval()
+    model = AutoModel.from_pretrained(a.model, dtype=torch.bfloat16,
+                                      trust_remote_code=a.trust_remote_code).to("cuda").eval()
     chosen, binding = select_engine(model, engine=engine)
     target = binding.patch_target
     wrapper = model if target is not model else None
@@ -155,6 +159,13 @@ def main() -> None:
            "torch": str(torch.__version__), "stock_attention": getattr(cfg, "_attn_implementation", None),
            "batches": {}}
     data = workloads(validation_ids_below(cfg), a.state, a.questions)
+    if wrapper is not None:
+        ids, mask = next(iter(data.values()))[1]
+        with torch.no_grad():
+            out = wrapper(input_ids=ids, attention_mask=mask, **kwargs)
+        if not hasattr(out, "last_hidden_state"):
+            res["wrapper_skipped"] = f"returns {type(out).__name__}, no last_hidden_state"
+            wrapper = None
     stock = {}
     stock_samples = {}
     with torch.no_grad():

@@ -9,7 +9,7 @@ PACKED = Contract("varlen_attention", "q [T,H,D], k,v [T,KV,D], cu32, host lengt
 PADDED = Contract("segmented_padded_attention", "q [B*S,H,D], k,v [B*S,KV,D], static segments -> [B*S,H,D]",
                   "each row split into real/pad segments; GQA; optional causal mask; the choice's local window and scale (default D**-0.5); zero dropout", autograd=False)
 PREFIXED = Contract("prefixed_varlen_attention", "q [Tq,H,D], k,v [Tk,KV,D], cu_q32, cu_k32, max_q, max_k, host lengths_q, lengths_k -> [Tq,H,D]",
-                    "query segment i is the last lengths_q[i] tokens of key segment i; GQA; causal mask aligned to the segment end; the choice's local window and scale (default D**-0.5); zero dropout", autograd=False)
+                    "query segment i reads key segment i: causal, as its last lengths_q[i] tokens (mask aligned to the segment end), else all of it; GQA; the choice's local window and scale (default D**-0.5); zero dropout", autograd=False)
 
 
 def _check(q, k, v):
