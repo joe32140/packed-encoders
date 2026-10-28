@@ -6,6 +6,16 @@ the lower-level attention benchmarks, and the remote launchers used to run them.
 Generated JSON results and downloaded datasets stay under the ignored
 `benchmarks/results/` and `benchmarks/data_cache/` directories.
 
+## CPU benchmarks
+
+[`cpu/README.md`](cpu/README.md) documents the ModernBERT CPU performance,
+accuracy, packing-cache and native hardware checks. Comparisons use HF SDPA,
+trimmed ONNX FP32 and MatMulNBits W8A8. Generated results belong under the ignored
+`benchmarks/results/cpu/` directory.
+
+The runtime itself is documented in [`../docs/modernbert-cpu.md`](../docs/modernbert-cpu.md)
+and the [SME2 guide](../docs/modernbert-cpu-sme.md).
+
 ## Published showcases
 
 | Workload | Hardware | Protocol | Runner | Canonical config |
