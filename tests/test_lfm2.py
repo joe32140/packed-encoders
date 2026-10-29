@@ -439,3 +439,57 @@ def test_embedding_hash_collisions_never_share_different_rows(tiny, monkeypatch)
         assert eng.plan_sharing(None, [100, 100, 100], embeds=embeds) is None              # all collide: refused
     finally:
         eng.release()
+
+
+# ---------------------------------------------------------------------------- grouped rows
+
+
+@torch.no_grad()
+def test_grouped_rows_match_the_model_under_the_same_masks(tiny):
+    from packed_encoders.arch.lfm2 import grouped_attention_masks
+    from packed_encoders.arch.lfm2.engine import Lfm2Engine
+
+    contexts, groups = [40, 25, 9, 3], [[7, 1, 12], [], [20], [5, 30, 2]]
+    lengths = [c + sum(g) for c, g in zip(contexts, groups)]
+    gen = torch.Generator().manual_seed(5)
+    seqs = [torch.randint(0, VOCAB, (n,), generator=gen).cuda() for n in lengths]
+    ids = torch.nn.utils.rnn.pad_sequence(seqs, batch_first=True)
+    real = (torch.arange(ids.shape[1])[None] < torch.tensor(lengths)[:, None]).cuda()
+    masks = grouped_attention_masks(tiny.config, lengths, groups, ids.shape[1], torch.bfloat16, "cuda")
+    eng = Lfm2Engine(tiny)
+    try:
+        ref = tiny(input_ids=ids, attention_mask=masks, use_cache=False).last_hidden_state[real]
+        causal = tiny(input_ids=ids, attention_mask=real.long(), use_cache=False).last_hidden_state[real]
+        got = eng.forward_grouped(torch.cat(seqs), lengths, groups)
+        assert F.cosine_similarity(got.float(), ref.float(), dim=-1).min() > 0.99
+        assert F.cosine_similarity(got.float(), causal.float(), dim=-1).min() < 0.9     # not the causal forward
+    finally:
+        eng.release()
+
+
+@torch.no_grad()
+def test_a_failed_grouped_check_leaves_the_rest_of_the_pack_in_place(tiny, monkeypatch):
+    """forward_grouped is optional: a model forward that takes no per-layer-type masks costs
+    only it, recorded and warned about; packed calls still run."""
+    import packed_encoders as pe
+    import packed_encoders.arch.lfm2 as lfm2_entry
+    from packed_encoders.batch import PackedBatch
+    from packed_encoders.errors import PackedEncodersError
+
+    def no_masks(*args, **kwargs):
+        raise TypeError("this forward takes no per-layer-type masks")
+
+    monkeypatch.setattr(lfm2_entry, "grouped_attention_masks", no_masks)
+    model = copy.deepcopy(tiny)
+    with pytest.warns(UserWarning, match="forward_grouped is unavailable"):
+        pe.pack(model)
+    try:
+        packed = pe.get_engine(model)
+        assert "takes no per-layer-type masks" in packed.state.report.grouped_rejected
+        ids = torch.randint(0, VOCAB, (20,), generator=torch.Generator().manual_seed(6)).cuda()
+        batch = PackedBatch(input_ids=ids, host_lengths=(20,))
+        assert packed.forward_packed(batch).shape == (20, model.config.hidden_size)
+        with pytest.raises(PackedEncodersError, match="grouped rows are unavailable"):
+            packed.forward_grouped(batch, [[5]])
+    finally:
+        pe.unpack(model)

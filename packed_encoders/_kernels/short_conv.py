@@ -41,9 +41,11 @@ def short_conv(x: Tensor, weight: Tensor, pos: Tensor) -> Tensor:
     N, D, KW = x.shape[0], weight.shape[0], weight.shape[1]
     y = torch.empty((N, D), device=x.device, dtype=x.dtype)
     if N:
-        BT, BD = (16 if N <= 2048 else 64), 128
+        # The large tile takes 8 warps: on 4, a 7-tap conv spills (RTX 4090, D=2048, 5,274 tokens:
+        # 2.67 ms against 0.14); 3 taps run about the same on either.
+        BT, BD, warps = (16, 128, 4) if N <= 2048 else (64, 128, 8)
         _short_conv_kernel[(triton.cdiv(D, BD), triton.cdiv(N, BT))](
-            x, weight, pos, y, x.stride(0), N, D=D, KW=KW, BT=BT, BD=BD, num_warps=4)
+            x, weight, pos, y, x.stride(0), N, D=D, KW=KW, BT=BT, BD=BD, num_warps=warps)
     return y
 
 

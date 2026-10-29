@@ -484,6 +484,129 @@ in full. With sharing on, a batch that shares nothing costs only its planning. `
 model's own forward even while sharing is off, reporting `shared_cos_mean` / `shared_cos_min`
 and, on a miss, `shared_prefix_rejected`.
 
+## LFM3
+
+`Lfm3Hybrid` packs LFM3 text backbones with the LFM2 engine. LFM3 keeps LFM2's layout (gated
+short convolutions between GQA attention layers with per-head Q/K RMSNorm, SwiGLU MLPs) and
+changes five things the engine follows:
+
+- **Three layer types.** Convolutions, full attention and sliding-window attention
+  (`config.sliding_window`), each attention type with its own RoPE table
+  (`rotary_emb.layer_types`). A partial rotary factor arrives as a full-width table whose tail
+  frequencies are zero, which the fused Q/K kernel applies as given. Attention is selected and
+  probed per type, with the window on sliding layers. Prefixed attention takes the window too,
+  so shared prefixes longer than the window still match the model.
+- **A per-head output gate.** `gate_proj` (hidden → heads, sigmoid, applied before `o_proj`)
+  joins the q|k|v GEMM. Its rows are padded to a multiple of 8 so every view into the GEMM's
+  output stays aligned.
+- **Sandwich norms.** `post_operator_norm` after each mixer and `post_ffn_norm` after each MLP
+  are fused with the residual add and the next norm (`post_norm_add`, the shared post-norm
+  piece).
+- **7-tap convolutions.** The short-conv kernel already takes any width. Its large tile now
+  runs 8 warps: on 4, a 7-tap conv spilled (RTX 4090, 2,048 channels, 5,274 tokens: 2.67 ms per
+  call, against 0.14 on 8). LFM2's 3-tap conv runs about the same on either.
+- **Remote code.** LFM3 checkpoints ship their modeling code (`trust_remote_code=True`; tested
+  with transformers 5.19). `HFLfm3Adapter` binds a backbone of class `Lfm3Model` from a
+  `modeling_lfm3` module, whether handed over directly, under a task head, or as a wrapper's
+  `.language_model`. Its convolutions mask padding for a single row too, so single-row
+  left-padded calls run packed; LFM2's fall back.
+
+Everything else is LFM2's: packed and graphed calls, input embeddings, shared prefixes, the
+validation gates and the fallbacks. Projections must hold their weights as parameters, so a
+model whose code fuses or wraps them (a fused-projection module without its own `.weight`) is
+refused before any mutation: pack before fusing.
+
+LFM3-1.7B, RTX 4090, flash2 (stock: sdpa), random rows, ms per batch (`hf_forward_bench.py
+--trust-remote-code`, the batches above):
+
+| Batch | Padding | Stock HF (padded) | Packed, eager | Packed, graphs | Speedup |
+|---|---|---|---|---|---|
+| 1 × 128 tokens | 0% | 18.4 | 7.2 | 5.2 | 3.52x |
+| 8 rows, 32–512 tokens | 47% | 113.8 | 49.1 | 57.4 | 2.32x |
+| 32 rows, 32–512 tokens | 39% | 552.7 | 219.5 | 250.1 | 2.52x |
+| 8 × 1,024 tokens | 0% | 265.5 | 183.4 | 183.6 | 1.45x |
+
+| State, questions | Tokens not recomputed | Stock HF | Packed, every row in full | Shared, eager | Shared, graphs |
+|---|---|---|---|---|---|
+| 256 tokens, 8 | 80% | 69.3 | 52.5 | 14.1 (4.9x) | 13.2 (5.3x) |
+| 1,024 tokens, 8 | 85% | 286.9 | 190.4 | 32.0 (9.0x) | 31.7 (9.1x) |
+| 2,048 tokens, 16 | 93% | 1,219.3 | 733.7 | 63.3 (19.3x) | 63.0 (19.4x, runs eagerly: past the bounds) |
+
+LiquidAI/d1-2B and d1-Omni-2B (LFM3 backbones of the same shape, under vision and omni
+wrappers whose own heads the benchmark skips) run these batches within a few percent of these
+times.
+
+Per-token cosine with stock HF on LFM3-1.7B: 0.9967 to 0.9986 mean, below LFM2's; d1-2B and
+d1-Omni-2B read 0.9987 to 0.9998 on the same benchmark. The gap is in the model's own bf16 forward,
+not the engine. Against an fp32 forward of the same batches, LFM3-1.7B's stock forward reads
+0.9979 to 0.9983 mean and the engine 0.9983 to 0.9988 (eager; graphs 0.9981 to 0.9988). Engine
+against stock therefore compares two bf16 paths, each about 0.002 from fp32. With sharing on, the
+worst tokens sit inside the shared prefix, which runs once as its own row, not at the
+continuations' recomputed conv taps. One prefix token of the benchmark's 256-token state reads
+0.948 against fp32 shared and 0.992 in full. Across six more seeded state/question batches, the
+shared minimum is 0.987 and the shared mean 0.9977 to 0.9997, against stock's 0.9961 to 0.9996.
+
+### Grouped rows
+
+Some decision models are trained to read one shared state followed by several questions in
+a single row, where a question sees the state and itself but not the other questions. Run
+causally, as a prefix shared across rows, such a model reads its questions differently from
+how it was trained. `forward_grouped` serves that layout directly, as one pass per row:
+
+```python
+pe.pack(model)
+packed = pe.get_engine(model)
+rows = [torch.cat([state, *questions])]                   # [context][group 1]..[group N]
+batch = pe.PackedBatch(input_ids=torch.cat(rows).cuda(), host_lengths=tuple(map(len, rows)))
+with torch.no_grad():
+    hidden = packed.forward_grouped(batch, [[len(q) for q in questions]])   # (tokens, hidden)
+```
+
+On full-attention layers a context token reads its whole row, and a group token reads its
+row's context and its own group, in both directions. Sliding-window and convolution layers stay
+causal over the row. Groups are independent within one full-attention layer only: every group
+writes into the context there and reads it back at the next, and the causal layers carry the
+groups before it, so across the stack a group hears the others. A row with one group reads all
+of itself, as does a row of context alone. `groups[i]` lists row i's group
+lengths in order; the tokens before them are its context. `inputs_embeds` may replace the ids.
+Each full-attention layer is one non-causal call to the prefixed varlen kernel. Its query
+segments are the contexts and groups in token order, so queries are never gathered. Each
+segment reads a gathered key segment: a context reads its whole row, a group its context then
+itself. Selection probes the prefixed kernel non-causally as well as causally. Calls run
+eagerly; there are no graphs for grouped plans yet.
+
+`grouped_attention_masks(cfg, lengths, groups, seq, dtype, device)` builds the same pattern
+as additive masks keyed by layer type, which an LFM3 forward takes as given, for checking the
+engine against the model. `validate()` does that at pack time for token ids and embeddings,
+reporting `grouped_cos_mean` / `grouped_cos_min`. A miss, or a forward that won't take such
+masks, sets `grouped_rejected` and leaves the rest of the pack in place.
+
+LiquidAI/d1-2B (an LFM3-VL decision model: 2,048 hidden, 24 layers: 13 convolutions, 6 full
+attention, 5 sliding with a 256-token window) on an RTX 4090, flash2. Rows are random tokens, groups
+16–40 tokens, ms per batch (`grouped_rows_bench.py --trust-remote-code`). Stock is the model's
+own forward under `grouped_attention_masks`, right padded. Causal is `forward_packed` on the
+same rows, with graphs within bounds:
+
+| Batch | Tokens | Stock HF, masked | `forward_grouped` | Causal, packed | Speedup | Cosine with stock, mean / min |
+|---|---|---|---|---|---|---|
+| 1 × (64 + 4 groups) | 179 | 21.2 | 12.9 | 6.2 | 1.65x | 0.99883 / 0.9736 |
+| 1 × (64 + 16 groups) | 535 | 23.0 | 16.9 | 14.3 | 1.36x | 0.99945 / 0.9976 |
+| 64 × (64 + 4 groups) | 11,271 | 445.9 | 251.8 | 267.7 | 1.77x | 0.99934 / 0.9853 |
+| 1 × (1,024 + 16 groups) | 1,481 | 47.9 | 36.5 | 34.3 | 1.31x | 0.99968 / 0.9958 |
+| 1 × (5,120 + 16 groups) | 5,585 | 206.2 | 141.8 | 128.4 | 1.45x | 0.99981 / 0.9986 |
+| 8 × (2,048 + 4 groups) | 17,234 | 638.1 | 394.1 | 384.4 | 1.62x | 0.99972 / 0.9945 |
+
+Past a thousand tokens, grouping costs 3–10% over a causal packed pass: one key/value gather per
+full-attention layer. On short rows the gap is mostly graphs against eager, and at 64 rows the
+eager grouped pass beats the causal graph, which pads every row to its bucket.
+Pack-time validation on d1-2B (mean / min per-token cosine with the model's own forward):
+eager 0.99844 / 0.99036, graphs 0.99878 / 0.99335, shared 0.99847 / 0.98176, grouped 0.99943 /
+0.99337. Against an fp32 forward under the checkpoint's own state/question attention (5 rows,
+5,138 tokens), the engine reads 0.999871 mean (min 0.98289) and the model's own bf16 forward
+0.999845 (min 0.99113). Across
+100 decision outputs read from those hidden states, probabilities moved by at most 0.0086 (mean
+0.0018), and no decision changed.
+
 ## EmbeddingGemma 2
 
 `EmbeddingGemma2` packs EmbeddingGemma 2 text backbones: 24 bidirectional GQA layers, sliding

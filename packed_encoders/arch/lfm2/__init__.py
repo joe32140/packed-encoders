@@ -16,7 +16,12 @@ What `pack()` installs, per batch:
     bucket, else the eager packed engine.
   - other input-embedding batches, no grad: the eager packed engine.
   - grad-enabled calls, a KV cache (pass `use_cache=False`, or set it in the config), extra
-    outputs, explicit `position_ids`, a mask with holes: the original forward, untouched.
+    outputs, explicit `position_ids`, a mask with holes or any mask but a 2D padding mask (a
+    prepared per-layer-type mapping, say): the original forward, untouched.
+
+Rows laid out `[context][group 1]..[group N]` (a decision model's state, then several questions
+read in one pass) run with grouped attention through `PackedLfm2.forward_grouped`; see there.
+The LFM3 entry (packed_encoders.arch.lfm3) shares this module and the engine.
 """
 
 from __future__ import annotations
@@ -68,6 +73,40 @@ def _lfm2_text_model(module: object) -> nn.Module | None:
     return lm if lm is not module and _lfm2_text_model(lm) is lm else None
 
 
+def grouped_attention_masks(cfg, lengths, groups, seq: int, dtype: torch.dtype, device) -> dict[str, Tensor | None]:
+    """What `forward_grouped` computes, as masks the model's own forward takes (a mapping keyed by
+    layer type, additive, `(rows, 1, seq, seq)`) for its rows right padded to `seq`: grouped on
+    full-attention layers, causal within the window on sliding ones, and the convolutions
+    unmasked (a right pad never reaches a real token). A pad query reads itself, so no row of
+    the mask is empty. For checking the engine against the model; it costs `rows * seq**2`."""
+    B = len(lengths)
+    q, k = torch.arange(seq)[:, None], torch.arange(seq)[None, :]
+    full = torch.zeros(B, seq, seq, dtype=torch.bool)
+    for i, (n, own) in enumerate(zip(lengths, groups)):
+        context = n - sum(own)
+        full[i, :n, :context] = True              # every token reads the context
+        full[i, :context, :n] = True              # the context reads the whole row
+        at = context
+        for size in own:
+            full[i, at:at + size, at:at + size] = True
+            at += size
+    real = torch.arange(seq)[None, :] < torch.tensor(lengths)[:, None]
+    pad_self = (~real)[:, :, None] & (q == k)[None]
+    allowed = {"full_attention": full}
+    window = getattr(cfg, "sliding_window", None)
+    if window:
+        allowed["sliding_attention"] = ((k <= q) & (q - k < window))[None] & real[:, None, :]
+    low = torch.finfo(dtype).min
+    masks: dict[str, Tensor | None] = {}
+    for kind in set(cfg.layer_types):
+        if kind in allowed:
+            keep = allowed[kind] | pad_self
+            masks[kind] = torch.where(keep, 0.0, low).to(device=device, dtype=dtype)[:, None]
+        else:
+            masks[kind] = None
+    return masks
+
+
 @dataclass
 class Lfm2Report:
     capability: tuple[int, int]
@@ -86,6 +125,9 @@ class Lfm2Report:
     shared_prefix_rejected: str | None = None  # why rows can't share prefixes here (None: they can, opt in)
     shared_cos_mean: float | None = None       # rows continuing shared prefixes (ids and embeddings) vs the model
     shared_cos_min: float | None = None
+    grouped_rejected: str | None = None        # why forward_grouped is unavailable here (None: it runs)
+    grouped_cos_mean: float | None = None      # grouped rows vs the model's forward under the same masks
+    grouped_cos_min: float | None = None
     pieces: dict = field(default_factory=dict)
 
     def record(self, name: str, got: Tensor, ref: Tensor) -> tuple[float, float]:
@@ -109,6 +151,7 @@ class Lfm2State:
     report: Lfm2Report | None = None
     fallback_warned: bool = False
     shared_runner: SharedGraphRunner | None = None
+    single_row_conv_masked: bool = False      # the model masks a lone left-padded row's conv inputs (LFM3)
 
     def set_cuda_graph(self, enabled: bool, config: PaddedGraphConfig | None = None) -> None:
         if config is not None and not isinstance(config, PaddedGraphConfig):
@@ -187,8 +230,8 @@ def _hf_rows(state: Lfm2State, input_ids, embeds, attention_mask, args, kwargs) 
     B, S = (input_ids if embeds is None else embeds).shape[:2]
     if attention_mask is None:
         return [S] * B, [0] * B
-    if attention_mask.shape != (B, S):
-        return None
+    if not isinstance(attention_mask, Tensor) or attention_mask.shape != (B, S):
+        return None          # a prepared mask (a per-layer-type mapping, a 4D mask): only the model reads it
     real = attention_mask != 0
     lens = real.sum(1)
     col = torch.arange(S, device=real.device)
@@ -198,8 +241,8 @@ def _hf_rows(state: Lfm2State, input_ids, embeds, attention_mask, args, kwargs) 
     lengths, right, left = flat[:B], flat[B:2 * B], flat[2 * B:]
     if min(lengths) == 0 or not all(r or l for r, l in zip(right, left)):
         return None          # an empty row, or a mask with holes
-    if B == 1 and not right[0]:
-        # HF skips masking short-conv inputs for a single row. Left pads can therefore
+    if B == 1 and not right[0] and not state.single_row_conv_masked:
+        # LFM2 skips masking short-conv inputs for a single row. Left pads can therefore
         # contribute to its first real tokens; removing them would change the result.
         return None
     return lengths, [0 if r else S - n for n, r in zip(lengths, right)]
@@ -215,8 +258,8 @@ def _make_hf_forward(module: nn.Module, state: Lfm2State):
             if not state.fallback_warned:
                 state.fallback_warned = True
                 warnings.warn("packed-encoders: this call runs the model's original forward (gradients, a KV cache "
-                              "or use_cache, position_ids, extra outputs, single-row left padding or a mask with holes)",
-                              stacklevel=2)
+                              "or use_cache, position_ids, extra outputs, single-row left padding, a mask with holes "
+                              "or a prepared mask)", stacklevel=2)
             if embeds is not None:
                 kwargs["inputs_embeds"] = embeds
             return state.original_forward(input_ids, attention_mask, *args, **kwargs)
@@ -245,9 +288,10 @@ def _make_hf_forward(module: nn.Module, state: Lfm2State):
 
 class HFLfm2Adapter:
     name = "hf-lfm2"
+    find = staticmethod(_lfm2_text_model)
 
     def bind(self, module: object) -> ModelBinding | None:
-        lm = _lfm2_text_model(module)
+        lm = self.find(module)
         return ModelBinding(self, lm, lm) if lm is not None else None
 
     def install(self, binding: ModelBinding, packed) -> None:
@@ -255,43 +299,44 @@ class HFLfm2Adapter:
         binding.patch_target.forward = _make_hf_forward(binding.patch_target, packed.state)
 
 
-def _check_options(options):
+def _check_options(options, family="LFM2"):
     unknown = options.keys() - {"cuda_graph", "train_cuda_graph", "attention_backend", "validate"}
     if unknown:
-        raise PackedEncodersError(f"unsupported LFM2 options: {sorted(unknown)}")
+        raise PackedEncodersError(f"unsupported {family} options: {sorted(unknown)}")
     graph = options.get("cuda_graph")
     if graph is not None and not isinstance(graph, (bool, PaddedGraphConfig)):
-        raise PackedEncodersError("LFM2 graphs take a bool or PaddedGraphConfig")
+        raise PackedEncodersError(f"{family} graphs take a bool or PaddedGraphConfig")
     if options.get("train_cuda_graph") not in (None, False):
-        raise PackedEncodersError("training graphs are not implemented for LFM2")
+        raise PackedEncodersError(f"training graphs are not implemented for {family}")
     if options.get("attention_backend") not in _BACKENDS:
-        raise PackedEncodersError(f"unsupported LFM2 attention_backend: {options['attention_backend']!r}")
+        raise PackedEncodersError(f"unsupported {family} attention_backend: {options['attention_backend']!r}")
 
 
 class Lfm2Hybrid:
     name = "lfm2"
+    family = "LFM2"
     adapters = (HFLfm2Adapter(),)
+    single_row_conv_masked = False      # LFM2's conv skips the padding mask for one row (see _hf_rows)
 
     def __init__(self, *, pieces=None):
         self.pieces = pieces
 
-    @staticmethod
-    def _require_env(module: nn.Module) -> torch.device:
+    def _require_env(self, module: nn.Module) -> torch.device:
         try:
             param = next(module.parameters())
         except StopIteration as exc:
             raise ValidationError("the model has no parameters") from exc
         if param.device.type != "cuda":
-            raise ValidationError(f"the LFM2 engine needs CUDA weights; the model is on {param.device}")
+            raise ValidationError(f"the {self.family} engine needs CUDA weights; the model is on {param.device}")
         cap = torch.cuda.get_device_capability(param.device)
         if cap < MIN_CAPABILITY:
             raise ValidationError(f"sm_{cap[0]}{cap[1]} is below sm_80 (bf16 + Triton kernels)")
         if param.dtype != torch.bfloat16:
-            raise ValidationError("the LFM2 engine runs bf16 weights; load with torch_dtype=torch.bfloat16")
+            raise ValidationError(f"the {self.family} engine runs bf16 weights; load with torch_dtype=torch.bfloat16")
         try:
             import fla.modules.layernorm  # noqa: F401  (the fused residual + RMSNorm)
         except ImportError as exc:
-            raise ValidationError("LFM2 packing needs flash-linear-attention for its fused norms") from exc
+            raise ValidationError(f"{self.family} packing needs flash-linear-attention for its fused norms") from exc
         return param.device
 
     def _validate(self, module: nn.Module, *, batches: tuple[tuple[int, ...], ...] = ((7, 129, 300, 64), (3, 21, 30)),
@@ -316,12 +361,16 @@ class Lfm2Hybrid:
                 report.pieces = engine.composition.validate(engine)
             oracle = state.original_forward if state is not None else module.forward
             probe_state = state or Lfm2State(arch=self.name, engine=engine, original_forward=oracle, runner=None,
-                                             graph_enabled=False, stager=PinnedStager(engine.device))
+                                             graph_enabled=False, stager=PinnedStager(engine.device),
+                                             single_row_conv_masked=self.single_row_conv_masked)
             for lengths in batches:
                 self._check_numerics(oracle, probe_state, lengths, graphs, report)
             if engine.share_rejected is None:
                 self._check_sharing(oracle, probe_state, report)
             report.shared_prefix_rejected = engine.share_rejected
+            if engine.grouped_rejected is None:
+                self._check_grouped(oracle, engine, report)
+            report.grouped_rejected = engine.grouped_rejected
         finally:
             if built_here:
                 engine.release(rollback=True)
@@ -381,6 +430,39 @@ class Lfm2Hybrid:
             engine.share_rejected = reason
             warnings.warn(f"packed-encoders: {reason}; every row runs in full", stacklevel=4)
 
+    def _check_grouped(self, oracle, engine, report: Lfm2Report) -> None:
+        """Grouped rows (contexts of 1 token to 44 past the sliding window, 256 without one, with none
+        to four groups of 1 to 30) as token ids and as input embeddings, against the model's own
+        forward under the same masks given per layer type (`grouped_attention_masks`). A miss, or a
+        forward that takes no such masks, makes forward_grouped unavailable (recorded) rather than
+        failing the pack. The gate catches what varies with the machine and the model's code
+        (kernels, gathers, mask handling); the pattern itself is fixed code, pinned exactly by
+        tests/test_grouped_layout.py, since some wrong patterns score inside bf16 noise here."""
+        g = torch.Generator().manual_seed(2)
+        long = (getattr(engine.cfg, "sliding_window", None) or 256) + 44
+        contexts, groups = [40, 25, 9, long, 1], [[7, 1, 12], [], [20], [16, 30, 5, 22], [3, 3]]
+        lengths = [c + sum(own) for c, own in zip(contexts, groups)]
+        seqs = [torch.randint(0, validation_ids_below(engine.cfg), (n,), generator=g) for n in lengths]
+        reason = None
+        try:
+            ids = torch.nn.utils.rnn.pad_sequence(seqs, batch_first=True).to(engine.device)
+            real = (torch.arange(ids.shape[1])[None] < torch.tensor(lengths)[:, None]).to(engine.device)
+            masks = grouped_attention_masks(engine.cfg, lengths, groups, ids.shape[1], engine.dtype, engine.device)
+            packed = torch.cat(seqs).to(engine.device)
+            with torch.no_grad():
+                ref = oracle(input_ids=ids, attention_mask=masks, use_cache=False)[0][real].float()
+                for got in (engine.forward_grouped(packed, lengths, groups),
+                            engine.forward_grouped(None, lengths, groups, embeds=F.embedding(packed, engine.embed))):
+                    report.record("grouped", got.float(), ref)
+            if not (report.grouped_cos_mean >= MEAN_COS and report.grouped_cos_min >= MIN_COS):
+                reason = (f"grouped rows diverged from the model's forward under the same masks: per-token cosine "
+                          f"mean {report.grouped_cos_mean:.6f} min {report.grouped_cos_min:.5f}")
+        except Exception as exc:  # optional; ordinary numerics have already passed
+            reason = f"grouped-row validation failed: {type(exc).__name__}: {str(exc)[:200]}"
+        if reason is not None:
+            engine.grouped_rejected = reason
+            warnings.warn(f"packed-encoders: {reason}; forward_grouped is unavailable", stacklevel=4)
+
     def _check_numerics(self, oracle, state: Lfm2State, lengths, graphs, report: Lfm2Report) -> None:
         engine = state.engine
         g = torch.Generator().manual_seed(0)
@@ -410,14 +492,16 @@ class Lfm2Hybrid:
         from packed_encoders.arch.lfm2.engine import Lfm2Engine
 
         if attention_backend not in _BACKENDS:
-            raise PackedEncodersError(f"attention_backend for LFM2 must be one of {sorted(map(str, _BACKENDS))}")
-        return Lfm2Engine(module, causal=True, attention_order=_BACKENDS[attention_backend], pieces=self.pieces)
+            raise PackedEncodersError(f"attention_backend for {self.family} must be one of "
+                                      f"{sorted(map(str, _BACKENDS))}")
+        return Lfm2Engine(module, causal=True, attention_order=_BACKENDS[attention_backend], pieces=self.pieces,
+                          family=self.family)
 
     def validate(self, binding: ModelBinding, **kwargs) -> ValidationResult:
         return ValidationResult(self.name, self._validate(binding.patch_target, **kwargs))
 
     def prepare(self, binding: ModelBinding, options):
-        _check_options(options)
+        _check_options(options, self.family)
         module = binding.patch_target
         self._require_env(module)
         engine = self._engine(module, options.get("attention_backend"))
@@ -426,7 +510,8 @@ class Lfm2Hybrid:
             use_graphs = graph is None or bool(graph)
             runner = PaddedGraphRunner(engine, graph if isinstance(graph, PaddedGraphConfig) else None) if use_graphs else None
             state = Lfm2State(arch=self.name, engine=engine, original_forward=module.forward, runner=runner,
-                              graph_enabled=use_graphs, stager=PinnedStager(engine.device))
+                              graph_enabled=use_graphs, stager=PinnedStager(engine.device),
+                              single_row_conv_masked=self.single_row_conv_masked)
             packed = PackedLfm2(self, binding, state, options.get("attention_backend"))
             if options.get("validate", True):
                 state.report = packed.validate(graphs=use_graphs).details
@@ -481,15 +566,60 @@ class PackedLfm2(CUDAEpilogueSupport):
         positions restart at zero for each sequence. Inference only."""
         self._require_open()
         ids, lengths = batch.input_ids, batch.host_lengths
+        family = self.owner.family
         if torch.is_grad_enabled():
-            raise PackedEncodersError("LFM2 forward_packed requires no_grad or inference_mode")
+            raise PackedEncodersError(f"{family} forward_packed requires no_grad or inference_mode")
         if ids.ndim != 1 or ids.dtype != torch.int64 or ids.device != self.state.engine.device:
-            raise PackedEncodersError("LFM2 requires flat int64 token IDs on the weights' device")
+            raise PackedEncodersError(f"{family} requires flat int64 token IDs on the weights' device")
         if not lengths or any(type(n) is not int or n <= 0 for n in lengths) or sum(lengths) != ids.numel():
-            raise PackedEncodersError("LFM2 requires positive host_lengths summing to the token count")
+            raise PackedEncodersError(f"{family} requires positive host_lengths summing to the token count")
         if batch.cu_seqlens is not None or batch.position_ids is not None or batch.max_seqlen is not None:
-            raise PackedEncodersError("LFM2 takes host_lengths only; positions restart per sequence")
+            raise PackedEncodersError(f"{family} takes host_lengths only; positions restart per sequence")
         return _hidden(self.state, ids, lengths)
+
+    def forward_grouped(self, batch, groups, *, inputs_embeds: Tensor | None = None) -> Tensor:
+        """Rows laid out `[context][group 1]..[group N]`, each read in one pass with grouped
+        attention. On full-attention layers a context token reads every token of its row and a
+        group token its row's context and its own group, both ways; sliding-window and convolution
+        layers stay causal over the row. Groups are independent within one full-attention layer
+        only: each writes into the context there and reads it back at the next, and the causal
+        layers carry the groups before it, so across the stack a group hears the others.
+        A model trained to read its questions after one shared state this way is served as trained.
+        A row with one group reads all of itself, as does a row of context alone.
+
+        `batch`: flat device int64 `input_ids` with positive `host_lengths` (positions restart at
+        zero per row), or `input_ids=None` with `inputs_embeds` (tokens, hidden) in their place.
+        `groups[i]`: row i's group lengths in order, host ints > 0 summing to at most its length;
+        the tokens before them are its context. Returns final-normed hidden states (tokens, hidden),
+        eager. Inference only; `validate()` checks it against the model's own forward under the
+        same masks (`grouped_attention_masks`)."""
+        self._require_open()
+        engine, family = self.state.engine, self.owner.family
+        ids, lengths = batch.input_ids, batch.host_lengths
+        if torch.is_grad_enabled():
+            raise PackedEncodersError(f"{family} forward_grouped requires no_grad or inference_mode")
+        if engine.grouped_rejected:
+            raise PackedEncodersError(f"grouped rows are unavailable here: {engine.grouped_rejected}")
+        if (ids is None) == (inputs_embeds is None):
+            raise PackedEncodersError("forward_grouped takes input_ids or inputs_embeds, not both")
+        if inputs_embeds is None:
+            if ids.ndim != 1 or ids.dtype != torch.int64 or ids.device != engine.device:
+                raise PackedEncodersError(f"{family} requires flat int64 token IDs on the weights' device")
+            tokens = ids.numel()
+        else:
+            if (inputs_embeds.ndim != 2 or inputs_embeds.shape[1] != engine.hidden_size
+                    or inputs_embeds.device != engine.device):
+                raise PackedEncodersError("inputs_embeds must be (tokens, hidden) on the weights' device")
+            tokens = inputs_embeds.shape[0]
+        if not lengths or any(type(n) is not int or n <= 0 for n in lengths) or sum(lengths) != tokens:
+            raise PackedEncodersError(f"{family} requires positive host_lengths summing to the token count")
+        if batch.cu_seqlens is not None or batch.position_ids is not None or batch.max_seqlen is not None:
+            raise PackedEncodersError(f"{family} takes host_lengths only; positions restart per sequence")
+        groups = [list(own) for own in groups]
+        if len(groups) != len(lengths) or any(
+                any(type(g) is not int or g <= 0 for g in own) or sum(own) > n for n, own in zip(lengths, groups)):
+            raise PackedEncodersError("groups needs one list per row of positive group lengths within the row")
+        return engine.forward_grouped(ids, lengths, groups, embeds=inputs_embeds)
 
     def validate(self, **kwargs):
         self._require_open()
@@ -498,7 +628,7 @@ class PackedLfm2(CUDAEpilogueSupport):
 
     def configure(self, options):
         self._require_open()
-        _check_options(options)
+        _check_options(options, self.owner.family)
         if "attention_backend" in options and options["attention_backend"] != self.attention_backend:
             raise PackedEncodersError("unpack before changing the prepared attention backend")
         if "cuda_graph" in options and options["cuda_graph"] is not None:
@@ -512,7 +642,7 @@ class PackedLfm2(CUDAEpilogueSupport):
     def set_train_cuda_graph(self, enabled, config=None):
         self._require_open()
         if enabled or config is not None:
-            raise PackedEncodersError("training graphs are not implemented for LFM2")
+            raise PackedEncodersError(f"training graphs are not implemented for {self.owner.family}")
 
     def close(self, *, rollback=False):
         if self._closed:
@@ -527,4 +657,4 @@ class PackedLfm2(CUDAEpilogueSupport):
         self._closed = True
 
 
-__all__ = ["HFLfm2Adapter", "Lfm2Hybrid", "Lfm2Report", "PackedLfm2"]
+__all__ = ["HFLfm2Adapter", "Lfm2Hybrid", "Lfm2Report", "PackedLfm2", "grouped_attention_masks"]

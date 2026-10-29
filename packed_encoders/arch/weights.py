@@ -23,12 +23,17 @@ def require_plain(linears: Sequence[nn.Module]) -> None:
             )
 
 
-def share_rows(linears: Sequence[nn.Linear], registry: list[nn.Linear]) -> Tensor:
+def share_rows(linears: Sequence[nn.Linear], registry: list[nn.Linear], *, align: int = 1) -> Tensor:
     """Concatenate the weights row-wise and re-point every parameter at its slice of the
     result, so the merged GEMM weight and the HF parameters are one storage. Re-pointed
-    layers are appended to `registry` for `unshare_rows`."""
+    layers are appended to `registry` for `unshare_rows`. `align`: zero rows pad the result
+    to a multiple of it, so views into the GEMM's output keep aligned row strides."""
     require_plain(linears)
-    merged = torch.cat([lin.weight.detach() for lin in linears], 0)
+    parts = [lin.weight.detach() for lin in linears]
+    pad = -sum(p.shape[0] for p in parts) % align
+    if pad:
+        parts.append(parts[0].new_zeros(pad, parts[0].shape[1]))
+    merged = torch.cat(parts, 0)
     off = 0
     for lin in linears:
         n = lin.weight.shape[0]

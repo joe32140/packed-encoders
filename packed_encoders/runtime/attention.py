@@ -15,6 +15,8 @@ only gets slower. Rejections are recorded with their reason for `validate()` rep
 Causal engines also get a *prefixed* form: each query segment is the tail of a longer key
 segment (rows continuing a shared prefix, see runtime.sharing), so the causal mask is
 aligned to the end. It is probed the same way; when the winner's fails, SDPA serves it.
+With `bidirectional_prefixed` the same form is also probed without the causal mask, where a
+query segment reads its whole key segment (grouped rows, whose keys are gathered per segment).
 
 A choice is made for one attention *kind*: optionally a local window `(left, right)`
 (`-1`: unbounded) and a softmax scale (default `head_dim ** -0.5`). Both are bound into
@@ -242,7 +244,8 @@ def reference_prefixed(q, k, v, lengths_q, lengths_k, causal, window=(-1, -1), s
     return _segments(q.float(), k.float(), v.float(), list(lengths_q), list(lengths_k), causal, window, scale)
 
 
-def _probe_prefixed(prefixed, *, n_heads, n_kv_heads, head_dim, device, dtype, window, scale) -> float:
+def _probe_prefixed(prefixed, *, n_heads, n_kv_heads, head_dim, device, dtype, window, scale,
+                    causal: bool = True) -> float:
     gen = torch.Generator(device=device).manual_seed(1)
     lengths_q, lengths_k = [5, 1, 37, 16], [40, 64, 37, 80]     # a short tail, one token, a square, a long prefix
 
@@ -253,8 +256,8 @@ def _probe_prefixed(prefixed, *, n_heads, n_kv_heads, head_dim, device, dtype, w
         return torch.tensor([0, *torch.tensor(lengths).cumsum(0).tolist()], dtype=torch.int32, device=device)
 
     q, k, v = rnd(sum(lengths_q), n_heads), rnd(sum(lengths_k), n_kv_heads), rnd(sum(lengths_k), n_kv_heads)
-    got = prefixed(q, k, v, cu(lengths_q), cu(lengths_k), max(lengths_q), max(lengths_k), lengths_q, lengths_k, True)
-    ref = reference_prefixed(q, k, v, lengths_q, lengths_k, True, window, scale)
+    got = prefixed(q, k, v, cu(lengths_q), cu(lengths_k), max(lengths_q), max(lengths_k), lengths_q, lengths_k, causal)
+    ref = reference_prefixed(q, k, v, lengths_q, lengths_k, causal, window, scale)
     return (got.float() - ref).abs().max().item()
 
 
@@ -269,11 +272,13 @@ def select_attention(
     order: Sequence[str] | None = None,
     window: tuple[int, int] = (-1, -1),
     scale: float | None = None,
+    bidirectional_prefixed: bool = False,
 ) -> AttentionChoice:
     """Return the first candidate in `order` that imports, runs, and matches fp32 SDPA; for a
     causal model, also its prefixed form (or SDPA's, when the candidate's misses its probe).
     `window` (left, right; -1 unbounded) and `scale` (None: head_dim ** -0.5) are part of the
-    attention kind: bound into the kernels and probed."""
+    attention kind: bound into the kernels and probed. `bidirectional_prefixed`: the prefixed
+    form must also pass without the causal mask."""
     rejected: dict[str, str] = {}
     window = tuple(int(w) for w in window)
     geometry = dict(n_heads=n_heads, n_kv_heads=n_kv_heads, head_dim=head_dim, device=device, dtype=dtype,
@@ -293,7 +298,8 @@ def select_attention(
         if causal:
             for prefixed_name, fn in ((name, prefixed), ("sdpa", _sdpa(window, scale)[2])):
                 try:
-                    perr = _probe_prefixed(fn, **geometry)
+                    perr = max(_probe_prefixed(fn, causal=c, **geometry)
+                               for c in ((True, False) if bidirectional_prefixed else (True,)))
                 except Exception as exc:  # noqa: BLE001
                     rejected[f"{prefixed_name}:prefixed"] = _reason(exc)
                     continue
