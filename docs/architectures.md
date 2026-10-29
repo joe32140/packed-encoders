@@ -564,8 +564,10 @@ with torch.no_grad():
 
 On full-attention layers a context token reads its whole row, and a group token reads its
 row's context and its own group, in both directions. Sliding-window and convolution layers stay
-causal over the row, so a group hears the groups before it only through those. A row with one
-group reads all of itself, as does a row of context alone. `groups[i]` lists row i's group
+causal over the row. Groups are independent within one full-attention layer only: every group
+writes into the context there and reads it back at the next, and the causal layers carry the
+groups before it, so across the stack a group hears the others. A row with one group reads all
+of itself, as does a row of context alone. `groups[i]` lists row i's group
 lengths in order; the tokens before them are its context. `inputs_embeds` may replace the ids.
 Each full-attention layer is one non-causal call to the prefixed varlen kernel. Its query
 segments are the contexts and groups in token order, so queries are never gathered. Each

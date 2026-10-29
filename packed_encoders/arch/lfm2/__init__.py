@@ -431,13 +431,16 @@ class Lfm2Hybrid:
             warnings.warn(f"packed-encoders: {reason}; every row runs in full", stacklevel=4)
 
     def _check_grouped(self, oracle, engine, report: Lfm2Report) -> None:
-        """Grouped rows (contexts of 1 to 300 tokens, with none to four groups of 1 to 30, one row
-        past a 256-token window) as token ids and as input embeddings, against the model's own forward
-        under the same masks given per layer type (`grouped_attention_masks`). A miss, or a forward
-        that takes no such masks, makes forward_grouped unavailable (recorded) rather than failing
-        the pack."""
+        """Grouped rows (contexts of 1 token to 44 past the sliding window, 256 without one, with none
+        to four groups of 1 to 30) as token ids and as input embeddings, against the model's own
+        forward under the same masks given per layer type (`grouped_attention_masks`). A miss, or a
+        forward that takes no such masks, makes forward_grouped unavailable (recorded) rather than
+        failing the pack. The gate catches what varies with the machine and the model's code
+        (kernels, gathers, mask handling); the pattern itself is fixed code, pinned exactly by
+        tests/test_grouped_layout.py, since some wrong patterns score inside bf16 noise here."""
         g = torch.Generator().manual_seed(2)
-        contexts, groups = [40, 25, 9, 300, 1], [[7, 1, 12], [], [20], [16, 30, 5, 22], [3, 3]]
+        long = (getattr(engine.cfg, "sliding_window", None) or 256) + 44
+        contexts, groups = [40, 25, 9, long, 1], [[7, 1, 12], [], [20], [16, 30, 5, 22], [3, 3]]
         lengths = [c + sum(own) for c, own in zip(contexts, groups)]
         seqs = [torch.randint(0, validation_ids_below(engine.cfg), (n,), generator=g) for n in lengths]
         reason = None
@@ -578,7 +581,9 @@ class PackedLfm2(CUDAEpilogueSupport):
         """Rows laid out `[context][group 1]..[group N]`, each read in one pass with grouped
         attention. On full-attention layers a context token reads every token of its row and a
         group token its row's context and its own group, both ways; sliding-window and convolution
-        layers stay causal over the row, so a group hears the groups before it only through those.
+        layers stay causal over the row. Groups are independent within one full-attention layer
+        only: each writes into the context there and reads it back at the next, and the causal
+        layers carry the groups before it, so across the stack a group hears the others.
         A model trained to read its questions after one shared state this way is served as trained.
         A row with one group reads all of itself, as does a row of context alone.
 

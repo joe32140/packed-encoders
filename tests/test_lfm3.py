@@ -195,6 +195,22 @@ def test_one_full_attention_layer_reads_the_context_and_its_own_group_only():
         engine.release(rollback=True)
 
 
+def test_grouping_touches_full_attention_layers_only():
+    """Without a full-attention layer, grouped rows are the causal forward: sliding-window and
+    convolution layers read each row causally whatever its groups (a mask-free check; grouping
+    sliding layers too scores inside bf16 noise on a trained model, so validation can't see it)."""
+    from packed_encoders.arch.lfm2.engine import Lfm2Engine
+
+    model = _model(num_hidden_layers=4, layer_types=["conv", "sliding_attention", "conv", "sliding_attention"])
+    engine = Lfm2Engine(model, family="LFM3")
+    try:
+        lengths, groups = [70, 9, 40], [[12, 5, 30], [4], []]           # the first row runs past the window
+        ids = torch.cat([_ids(n, 20 + i) for i, n in enumerate(lengths)])
+        assert torch.equal(engine.forward_grouped(ids, lengths, groups), engine.forward_packed(ids, lengths))
+    finally:
+        engine.release(rollback=True)
+
+
 def test_forward_grouped_checks_its_arguments(tiny):
     import packed_encoders as pe
     from packed_encoders.batch import PackedBatch
